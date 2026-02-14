@@ -29,7 +29,7 @@ local Config = {
         -- TEST MODE: Bypasses ALL checks (afford, director, warmup, etc.) and just fires OpenEgg directly
         TestMode = {
             Enabled = true,         -- ENABLED: Raw hatch mode
-            Egg = "Lucky Event Egg",-- Egg to hatch
+            Egg = "Lucky Event",-- Egg to hatch
             Amount = "auto",        -- "auto" (detects gamepass: 8 if x8Egg, else 3) | 1 | 3 | 8
             Delay = 0.1,            -- Delay between hatches
         },
@@ -5195,4 +5195,5 @@ log("INFO", "   KAITUN v2.2")
 log("INFO", "=================================")
 
 Kaitun.Run()
+
 
