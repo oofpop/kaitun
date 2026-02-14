@@ -1,0 +1,5198 @@
+--[[
+    Kaitun - TapSim Automation v2.2
+    Configure below, execute once, let it run.
+]]
+wait(10)
+local Config = {
+    -- Auto Tap
+    AutoTap = {
+        Enabled = true,
+        Delay = 0.01,  -- Minimal delay for max tap speed at low FPS
+    },
+
+    -- Anti-AFK (jump every N seconds to avoid idle kick)
+    AntiAFK = {
+        Enabled = true,
+        Interval = 180, -- 3 minutes
+        Method = "vim_space", -- uses VirtualInputManager Space key (getgenv().AutoJumpRunning)
+    },
+    
+    -- Egg Hatching
+    EggHatching = {
+        Enabled = true,
+        TargetEgg = "",         -- Manual override (forces this egg always)
+        PriorityEgg = "Divine Egg",  -- Priority egg (tries this first when affordable, falls back to progression if fails)
+        Amount = "auto",        -- "auto" (recommended) | 1 | 3 | 8  (triple is free; 8 requires pass)
+        LogEvery = 1,          -- Log 1 hatch per N hatches (0 = never). Helps prevent freezes from log spam.
+        PriorityRetryDelay = 30,  -- If priority egg fails (not "broke"), retry after this many seconds
+
+        -- TEST MODE: Bypasses ALL checks (afford, director, warmup, etc.) and just fires OpenEgg directly
+        TestMode = {
+            Enabled = true,         -- ENABLED: Raw hatch mode
+            Egg = "Lucky Event Egg",-- Egg to hatch
+            Amount = "auto",        -- "auto" (detects gamepass: 8 if x8Egg, else 3) | 1 | 3 | 8
+            Delay = 0.1,            -- Delay between hatches
+        },
+    },
+
+    -- Director (makes this a "true kaitun": chooses what to do so you never touch settings)
+    Director = {
+        Enabled = true,
+
+        -- Hatch decision: quest -> index -> best progression egg
+        Hatching = {
+            PreferQuestEggs = false, -- Disabled: focus on index/progression instead of quest eggs
+            PreferIndex = false,     -- Disabled: only use index via Collection goal, not legacy AutoIndex
+
+            -- AutoIndex stop conditions (prevents "stuck in index mode forever")
+            StopIndexWhenMissingLE = 0, -- stop index once missing <= this (across targeted tiers)
+
+            -- Progress reserve: don't spend currency needed for next unlock/world
+            ReserveForProgress = true,
+            ReserveClicksMultiplier = 1.05, -- keep 5% buffer above next required clicks
+            MinReserveClicks = 0,           -- absolute minimum reserve
+        },
+
+        -- Which quest types the director is allowed to satisfy automatically
+        QuestTypes = {
+            OpenEgg = true,
+            UnlockIsland = true, -- (informational for now; unlocking handled by UnlockLoop)
+            Click = true,
+            Rebirth = true,
+            Golden = true,
+        },
+
+        -- Goals: "Collection" achievement = the real "pet index quest" in this game
+        -- Tracks DiscoveredCount (unique Normal pets) and gives rewards at tier thresholds:
+        --   Tier 1: 26 pets  → +1 Equip, 1.05x PetTrainerExp
+        --   Tier 2: 65 pets  → +20 Storage, 1.1x PetTrainerExp
+        --   Tier 3: 130 pets → +30 Storage, 1.15x PetTrainerExp (RECOMMENDED for kaitun)
+        --   Tier 4: 260 pets → +40 Storage, 1.2x PetTrainerExp
+        Goals = {
+            CollectionTargetTier = 2, -- 0 = ignore, 1-4 = pursue index until this tier is reached
+                                       -- Once DiscoveredCount >= tier requirement, stop index and focus progression.
+                                       -- Tier 2 (65 pets) = quick goal for +20 Storage
+        }
+    },
+
+    -- Pet Index rewards (separate from quests): claim rewards when a tier is completed for an egg
+    PetIndex = {
+        AutoClaimRewards = {
+            Enabled = true,
+            Interval = 20, -- seconds between scans
+            Tiers = { Normal = true, Golden = true, Rainbow = true }, -- Secrets handled separately in UI; skip for now
+            LogClaims = true,
+        }
+    },
+    
+    -- Potion Machine (buy random potions with gems)
+    PotionMachine = {
+        Enabled = true,
+        BuyAmount = 10,     -- 1, 3, or 10 (bulk buying)
+        MinGems = 1000,     -- Don't buy if gems below this
+        Interval = 30,      -- seconds between buy attempts
+        LogPurchases = true,
+    },
+    
+    -- Rank Rewards (auto-claim rank up rewards)
+    RankRewards = {
+        Enabled = true,
+        Interval = 15,      -- seconds between checks
+        LogClaims = true,
+    },
+    
+    -- Electric Wheel (auto-spin when spins available)
+    ElectricWheel = {
+        Enabled = true,
+        Interval = 30,      -- seconds between checks
+        LogSpins = true,    -- Log what you got from spins
+    },
+    
+    -- Rainbow Machine queue settings
+    RainbowQueue = {
+        MaxSlots = 3,              -- Total queue slots (3 or 5 depending on gamepass/unlock)
+        RequireFullBatch = true,   -- Only queue if can do full batch of 5 (30s wait), never partial
+    },
+
+    -- Index Settings (used by Director's Collection goal)
+    IndexSettings = {
+        Strategy = "easy",      -- "easy" (high chance first) | "hard" (low chance first)
+        OnlyUnlockedEggs = true,
+    },
+
+    -- Auto Crafting (Gold / Rainbow / Void)
+    Crafting = {
+        Enabled = true,      -- Enable crafting for goal-driven index rewards
+
+        Golden = {
+            Enabled = true,
+            Mode = "auto",      -- "auto" (index→best) | "index" (rewards only) | "best" (team only) | "target" (specific pet)
+                                 -- auto: craft for PetIndex rewards first, then craft best pets for team improvement
+            TargetPet = "",     -- Pet name to craft ("" = off unless Mode="target")
+            Count = 6,          -- 1-6 (6 = 100% from Game.Crafting.Golden.Percentages)
+            IndexDriven = true, -- Deprecated (use Mode instead); kept for backwards compat
+            TeleportWait = 3.0, -- seconds to wait after teleporting to the machine (for area to load)
+            MaxPerCycle = 6,    -- crafts per CraftingLoop tick (bulk)
+            BulkDelay = 0.2,    -- delay between crafts in bulk
+            -- Team potential logic:
+            -- We decide what to golden based on its FUTURE potential (e.g. Rainbow max level),
+            -- so we don't get stuck needing goldens to make rainbows that would upgrade our team.
+            PotentialTier = "Rainbow",          -- evaluate as if this pet were this tier
+            PotentialUseMaxLevel = true,        -- use PetStats:GetMaxLevel(rarity) for evaluation
+            PotentialMinVsWorstEquipped = 1.0,  -- require potential >= worst equipped * this
+        },
+
+        Rainbow = {
+            Enabled = true,
+            Mode = "auto",      -- "auto" (index→best) | "index" (rewards only) | "target" (specific pet)
+            TargetPet = "",
+            Batch = 5,          -- How many pets to queue per cycle (1-5; 5 = only 30s wait time!)
+            IndexDriven = true, -- Deprecated (use Mode instead)
+        },
+
+        Void = {
+            Enabled = false,
+            TargetPet = "",     -- Pet name to craft ("" = off unless IndexDriven)
+            Count = 3,          -- 1-3 (3 = 100% from Game.Crafting.Void.Percentages)
+            -- Void does NOT affect index (per design). Keep this purely manual/optional.
+        },
+
+        Interval = 8,
+    },
+
+    -- Quests
+    Quests = {
+        AutoClaim = {
+            Enabled = true,
+            Interval = 10,      -- seconds between scans
+            LogClaims = true,
+        }
+    },
+    
+    -- Pet Management
+    Pets = {
+        AutoDelete = {
+            Enabled = true,
+            -- Delete these rarities (but KeepBest overrides)
+            DeleteRarities = {
+                Basic = true,
+                Common = true,
+                Rare = true,
+                Epic = true,
+                Legendary = true,
+                Mythical = false,
+            },
+            -- Never delete these tiers (regardless of KeepBest)
+            KeepTiers = {
+                Golden = false,
+                Diamond = false,
+                Rainbow = false,
+                Secret = true,      -- Never delete secrets (rare/valuable)
+                Exclusive = true,   -- Never delete exclusives
+            },
+            -- Keep inventory below this to avoid full
+            MaxPets = 80,       -- Higher buffer to avoid frequent cleanups
+            -- Always keep the top N pets by power (even if their rarity is in DeleteRarities)
+            KeepBest = 10,
+        },
+        -- Server-side auto delete (uses the game's built-in hatch auto delete)
+        -- This writes Replication.Data.AutoDeleting[eggName] and sends the table via the "AutoDelete" remote.
+        ServerAutoDelete = {
+            Enabled = true,
+            -- Keep secrets regardless
+            ProtectSecrets = true,
+            -- Keep pets not yet discovered (index progression)
+            ProtectUndiscovered = true,
+            -- Keep pets that could improve team (based on power vs worst equipped)
+            ProtectTeamUpgrades = true,
+            -- Also protect "future upgrades" so we don't auto-delete normals that are worth keeping
+            -- to craft into Golden/Rainbow later (ex: 40M Void Burst).
+            ProtectFutureUpgrades = true,
+            FutureUpgradeTier = "Rainbow", -- "Golden" | "Rainbow" | etc (must exist in PetStats.Tiers)
+            -- Keep if projected FutureUpgradeTier power is >= (WorstEquippedPower * MinVsWorstEquipped).
+            -- This makes it "based on our equipped team" instead of "egg's best pets".
+            FutureUpgradeMinVsWorstEquipped = 1.0,
+            -- Optional cap (0 = no cap). If >0, keeps only the top N qualifying names by projected future power.
+            FutureUpgradeTopN = 0,
+            -- How often to re-sync per egg (seconds)
+            SyncInterval = 10,
+        },
+        AutoEquipBest = true,
+    },
+    
+
+
+    
+    -- Auto Rebirth
+    Rebirth = {
+        Enabled = true,
+        Mode = "smart",         -- "smart" (recommended) | "best" | "save" | "single"
+                                -- smart: checks every SmartCheckMin..SmartCheckMax seconds and uses Clicks/sec vs costs
+                                --        to decide whether to rebirth now or wait for a better option.
+                                -- best: highest affordable option immediately
+                                -- save: wait for SaveTarget amount
+                                -- single: always option 1
+        SaveTarget = "100",     -- For "save" mode: supports K/M/B/T/Qa/Qi notation
+        MinClicks = 0,          -- Only rebirth if clicks above this (0 = ignore)
+        SmartCheckMin = 0,      -- For "smart": min seconds between checks (0 = check every ManagementLoop tick)
+        SmartCheckMax = 0,      -- For "smart": max seconds between checks (0 = no artificial delay)
+        SmartMaxWait = 20,      -- For "smart": don't wait longer than this for a better option
+        SmartWaitImminent = 15,  -- For "smart": only wait for next option if it's within this many seconds
+        SmartMinOption = 2,     -- For "smart": minimum option to consider
+        SmartGainPct = 0.25,    -- For "smart": wait only if better option is >= (1+gain) more efficient (rebirths/click)
+    },
+    
+    -- Minigames (DigGame - gives treats/items)
+    Minigames = {
+        Enabled = true,
+        Games = {
+            DigGame = true,
+        },
+        Delay = 0.5,            -- Delay between plays (when not on cooldown)
+        -- Cooldown now uses game's Replication.Data.MinigameCooldown (Counter/Max/Time)
+    },
+    
+    -- GemShop upgrades (cost gems, includes GLOBAL ClickMultiplier + RebirthButtons)
+    GemShopUpgrades = {
+        Enabled = true,
+        Mode = "balanced",      -- "balanced" (recommended) | "priority" (old behavior: max first item before next)
+        MinGems = 250,          -- keep some gems for other systems
+
+        -- Upgrade order used by both modes
+        Priority = {
+            "RebirthButtons",   -- progression-critical: unlock more rebirth options early
+            "ClickMultiplier",
+            "HatchSpeed",
+            "GoldenLuck",
+            "CriticalChance",
+            "AutoClickerSpeed",
+            "FreeAutoClicker",
+        },
+
+        -- In balanced mode: reach these minimum levels first (1 level per ManagementLoop tick)
+        Targets = {
+            RebirthButtons = 10,    -- Get more rebirth options early (critical for progression)
+            ClickMultiplier = 5,    -- Boost click income
+            HatchSpeed = 2,         -- Faster hatching
+        },
+
+        -- Optional caps to prevent dumping ALL gems into one upgrade forever (nil/0 = no cap)
+        Caps = {
+            -- RebirthButtons = 30,  -- Removed cap so it keeps buying (you have 9 unlocked buttons already)
+            -- ClickMultiplier = 20, -- Removed cap
+        },
+
+        -- After Targets are satisfied: "cheapest" | "priority"
+        AfterTargets = "priority",  -- Continue buying in priority order (RebirthButtons → ClickMultiplier → etc.)
+    },
+    
+    -- Auto World/Zone Unlock
+    WorldUnlock = {
+        Enabled = true,
+        AutoTeleport = true,    -- Teleport to newly unlocked zones
+        AutoBuyWorld2 = true,   -- Auto-buy Space world once requirements are met + you can afford it
+    },
+
+    -- Auto Travel (Best Island)
+    AutoTravel = {
+        Enabled = true,         -- Default ON: keep you on the best unlocked island for click multipliers
+        Interval = 15,          -- Seconds between checks
+        PreferBestUnlocked = true, -- If false, only travels after unlocking new zones
+        ConfirmMultiplier = true,  -- Verify via PerTap / tap delta
+    },
+    
+    -- Performance Optimizations (reduce CPU/GPU/memory for 24/7 AFK)
+    Performance = {
+        Enabled = true,         -- Enable all optimizations
+        FPSCap = 10,            -- Cap framerate (10-60; lower = less CPU)
+        Disable3DRendering = true,     -- Disable rendering (huge savings)
+        DisableTextures = true,        -- Clear mesh textures
+        DisableParticles = true,       -- Disable particles/trails/beams
+        DisableSounds = true,          -- Mute all sounds
+        DisableShadows = true,         -- Turn off shadows/lighting
+        PeriodicGC = true,             -- Run garbage collector every 60s
+        
+        -- Aggressive memory optimizations
+        DestroyAccessories = true,     -- Remove character accessories (huge RAM savings)
+        ClearUnusedGUIs = true,        -- Destroy unused GUI elements
+        MinimalCharacter = true,       -- Keep only essential character parts (hitbox)
+        DestroyPetModels = true,       -- Remove 3D pet models from workspace (saves 100+ MB)
+        ClearSoundBuffers = true,      -- Clear sound content (saves 20-50 MB)
+    },
+    
+    -- Webhooks (Discord notifications for rare hatches)
+    Webhook = {
+        Secret = {
+            Enabled = true,     -- Notify for Secret rarity pets
+            URL = "https://discord.com/api/webhooks/1462256014534508749/sP6ELYhdTZN5M8rOqKvPE2NAzPFmUCYsUpqPXIUXiZVO2NK9-2jgOUaFWV4210I39UBi",            -- Discord webhook URL for Secrets
+        },
+        Mythical = {
+            Enabled = true,     -- Notify for Mythical rarity pets
+            URL = "https://discord.com/api/webhooks/1462277575882576065/0jfg4iizyYOssLESxdA1R3XOFP70dOn1AonOgMo9lkxLf3s8W85NvOFzN7oLjDWq0OA1",            -- Discord webhook URL for Mythicals (separate channel)
+        },
+        Tokens = {
+            Enabled = true,     -- Notify when tokens increase
+            URL = "https://discord.com/api/webhooks/1462539939584413827/XjuUfWYOTDRY5p15y6P8gAbqyOF0DsSad6VO3RojkLvCm1KdWr7X91ochwOriqoTkovp",            -- Discord webhook URL for token gains
+            Interval = 5,       -- How often to check for token changes (seconds)
+            MinChange = 50,     -- Minimum token gain to trigger webhook
+            DashboardAPI = "http://104.237.6.219:7822/api/tokens",  -- Token dashboard API (empty to disable)
+        },
+    },
+    
+    -- General
+    Settings = {
+        LogLevel = "INFO",      -- INFO, WARN, ERROR, NONE, DEBUG
+        Singleton = true,       -- If script is executed twice, auto-stop the previous instance
+    },
+
+    -- TEMP: start plaza bootstrap from inside kaitun (so you can roll out plaza_bot updates without re-executing)
+    -- Set Enabled=true and point URL at your VPS-hosted plaza_bootstrap.lua (or any loader you want).
+    PlazaBootstrap = {
+        Enabled = false,
+        URL = "http://104.237.6.219:8080/plaza_bootstrap.lua",
+        RetryInterval = 10, -- seconds between retries if fetch/compile/run fails
+    },
+    
+    -- Friendship Boosts (fun friendships for boosts together!)
+    Friends = {
+        AddAll = true,          -- Auto-send friend requests to all players (existing + new joiners)
+        AddDelay = 5,           -- Delay between friend requests (seconds)
+    },
+    
+    -- Gamepass Auto-Buy (buy gamepasses with tokens in priority order)
+    -- Costs are automatically fetched from game data (Marketplace.Gamepasses)
+    GamepassAutoBuy = {
+        Enabled = true,
+        Interval = 30,          -- How often to check (seconds)
+        WebhookURL = "https://discord.com/api/webhooks/1462585702779715685/fiM49EAW8TKpdhptInMBZt2AhqedcJsXa2Lbtu2p30MSvyf0vhd00qE2j0mI6KPQi50t",
+        -- Priority list: buys in order, saves for each one before moving to next
+        -- Costs are auto-fetched from game! Just list names in priority order.
+        -- Set to false to skip a gamepass entirely.
+        Priority = {
+            "x8Egg",           -- 849 tokens
+            "Luck",            -- 149 tokens
+            "Luck2",           -- 649 tokens
+            "SecretHunter",    -- 1499 tokens
+            "MagicEggs",       -- 1599 tokens
+            "+2Equip",         -- 249 tokens
+            "+4Equip",         -- 749 tokens
+            "Storage1",        -- 79 tokens
+            "Storage2",        -- 349 tokens
+        },
+    }
+}
+
+----------------------------------------------------------------
+-- INTERNALS
+----------------------------------------------------------------
+
+local Kaitun = {_VERSION = "2.2.0"}
+
+-- Services
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+-- Prevent multiple copies from running at once (common source of freezes)
+local _ENVROOT = (getgenv and getgenv()) or _G
+if _ENVROOT.__KAITUN_INSTANCE and _ENVROOT.__KAITUN_INSTANCE.Stop then
+    pcall(function()
+        _ENVROOT.__KAITUN_INSTANCE.Stop()
+    end)
+end
+
+-- Network Shim - Direct remote access bypassing rename obfuscation
+local Network = (function()
+    local net = {}
+    local events = {}
+    local functions = {}
+
+    for _, v in pairs(getgc(true)) do
+        if type(v) == "table" then
+            local remote = rawget(v, "Remote")
+            local name = rawget(v, "Name")
+            if remote and name and type(name) == "string" and name ~= "" then
+                if rawget(v, "Callbacks") then
+                    events[name] = remote
+                elseif rawget(v, "Callback") ~= nil or rawget(v, "OnClientInvoke") ~= nil or rawget(v, "IncomingQueue") ~= nil then
+                    functions[name] = remote
+                end
+            end
+        end
+    end
+
+    function net:FireServer(name, ...)
+        local remote = events[name]
+        if remote then
+            remote:FireServer(...)
+        end
+    end
+
+    function net:InvokeServer(name, ...)
+        local remote = functions[name]
+        if remote then
+            return remote:InvokeServer(...)
+        end
+        return nil
+    end
+
+    function net:InvokeServerWithTimeout(timeout, name, ...)
+        return self:InvokeServer(name, ...)
+    end
+
+    return net
+end)()
+local Replication = require(ReplicatedStorage.Game.Replication)
+local EggData = require(ReplicatedStorage.Game.Eggs)
+local PetStats = require(ReplicatedStorage.Game.PetStats)
+local RebirthData = require(ReplicatedStorage.Game.Rebirths)
+local PortalData = require(ReplicatedStorage.Game.Portals)
+local WorldData = require(ReplicatedStorage.Game.Worlds)
+local BoostData = require(ReplicatedStorage.Game.Boosts)
+local EnchantData = require(ReplicatedStorage.Game.EnchantData)
+local SkinData = require(ReplicatedStorage.Game.Skins)
+local ComboStages = require(ReplicatedStorage.Game.ComboStages)
+local QuestData = require(ReplicatedStorage.Game.Quests)
+local CraftingData = require(ReplicatedStorage.Game.Crafting)
+local GemShopData = require(ReplicatedStorage.Game.GemShop)
+local AchievementsData = require(ReplicatedStorage.Game.Achievements)
+local PetIndexBonusReward = require(ReplicatedStorage.Game.PetIndexBonusReward)
+
+local LocalPlayer = Players.LocalPlayer
+
+-- Status tracking (per-loop so parallel loops don't overwrite each other)
+local _status = {
+    byLoop = {},  -- loopName -> {status, detail, ts}
+}
+
+-- Machine location memory (auto-discovers and remembers where machines are across game updates)
+local _machinePos = {} -- kind -> Vector3 (cached position)
+local _machineLocations = {} -- kind -> {world, zone, foundAt} (persistent location memory)
+
+-- Teleport mutex: prevents Travel/Unlock from fighting with crafting teleports.
+local _teleportLock = { untilTs = 0, reason = "" }
+local _craftState = { nextGolden = 0 } -- simple cooldown to prevent ping-pong
+
+local function teleportLocked()
+    return os.clock() < (_teleportLock.untilTs or 0)
+end
+
+local function setTeleportLock(seconds, reason)
+    _teleportLock.untilTs = os.clock() + (tonumber(seconds) or 0)
+    _teleportLock.reason = tostring(reason or "")
+end
+
+function Kaitun.IsTeleportLocked()
+    return teleportLocked(), _teleportLock.reason
+end
+
+function Kaitun.WithTeleportLock(seconds, reason, fn)
+    setTeleportLock(seconds, reason)
+    local ok, res = pcall(fn)
+    if not ok then
+        log("WARN", ("TeleportLock %s error: %s"):format(tostring(reason), tostring(res)))
+        return false, res
+    end
+    return true, res
+end
+
+local function setLoopStatus(loopName, status, detail)
+    -- IMPORTANT: mutate in-place to avoid per-tick table allocations (can freeze clients over time)
+    local slot = _status.byLoop[loopName]
+    if not slot then
+        slot = {status = "Idle", detail = "", ts = 0}
+        _status.byLoop[loopName] = slot
+    end
+    slot.status = status or "Idle"
+    slot.detail = detail or ""
+    slot.ts = os.clock()
+end
+
+local function setStatus(status, detail)
+    -- Backwards compatible: treat as main/global status
+    setLoopStatus("Main", status, detail)
+end
+
+function Kaitun.GetStatusTable()
+    return _status.byLoop
+end
+
+function Kaitun.GetStatus()
+    local priority = {"Unlock", "Travel", "Hatch", "Minigame", "Craft", "Quest", "Manage", "AFK", "Tap", "Main"}
+    local parts = {}
+    for _, key in ipairs(priority) do
+        local s = _status.byLoop[key]
+        if s and s.status and s.status ~= "Idle" then
+            if s.detail and s.detail ~= "" then
+                table.insert(parts, ("%s=%s: %s"):format(key, s.status, s.detail))
+            else
+                table.insert(parts, ("%s=%s"):format(key, s.status))
+            end
+        end
+    end
+    if #parts == 0 then
+        return "Idle"
+    end
+    return table.concat(parts, " | ")
+end
+
+-- Logging
+local LogLevels = {NONE = 0, ERROR = 1, WARN = 2, INFO = 3, DEBUG = 4}
+local function log(level, msg)
+    if LogLevels[level] <= LogLevels[Config.Settings.LogLevel] then
+        local prefix = {INFO = "[*]", WARN = "[!]", ERROR = "[X]"}
+        print(("[KAITUN] %s %s"):format(prefix[level] or "[?]", tostring(msg)))
+    end
+end
+
+-- Number notation parser (1K, 1M, 1B, 1T, 1Qa, 1Qi, etc.)
+local SUFFIXES = {
+    [""] = 1,
+    ["K"] = 1e3,
+    ["M"] = 1e6,
+    ["B"] = 1e9,
+    ["T"] = 1e12,
+    ["Qa"] = 1e15,
+    ["Qn"] = 1e18,
+    ["Sx"] = 1e21,
+    ["Sp"] = 1e24,
+    ["Oc"] = 1e27,
+    ["No"] = 1e30,
+    ["Dc"] = 1e33,
+    ["Ud"] = 1e36,
+    ["Dd"] = 1e39,
+    ["Td"] = 1e42,
+    ["Qad"] = 1e45,
+    ["Qid"] = 1e48,
+    ["Sxd"] = 1e51,
+    ["Spd"] = 1e54,
+    ["Ocd"] = 1e57,
+    ["Nod"] = 1e60,
+    ["Vg"] = 1e63,
+    ["Uvg"] = 1e66,
+    ["Dvg"] = 1e69,
+    ["Tvg"] = 1e72,
+}
+
+local function parseNumber(str)
+    if type(str) == "number" then return str end
+    str = tostring(str):gsub("%s", "")
+    local num, suffix = str:match("^([%d%.]+)(%a*)$")
+    if not num then return tonumber(str) or 0 end
+    local multiplier = SUFFIXES[suffix] or SUFFIXES[suffix:upper()] or 1
+    return (tonumber(num) or 0) * multiplier
+end
+
+local function formatNumber(n)
+    if n >= 1e72 then return ("%.2fTvg"):format(n / 1e72)
+    elseif n >= 1e69 then return ("%.2fDvg"):format(n / 1e69)
+    elseif n >= 1e66 then return ("%.2fUvg"):format(n / 1e66)
+    elseif n >= 1e63 then return ("%.2fVg"):format(n / 1e63)
+    elseif n >= 1e60 then return ("%.2fNod"):format(n / 1e60)
+    elseif n >= 1e57 then return ("%.2fOcd"):format(n / 1e57)
+    elseif n >= 1e54 then return ("%.2fSpd"):format(n / 1e54)
+    elseif n >= 1e51 then return ("%.2fSxd"):format(n / 1e51)
+    elseif n >= 1e48 then return ("%.2fQid"):format(n / 1e48)
+    elseif n >= 1e45 then return ("%.2fQad"):format(n / 1e45)
+    elseif n >= 1e42 then return ("%.2fTd"):format(n / 1e42)
+    elseif n >= 1e39 then return ("%.2fDd"):format(n / 1e39)
+    elseif n >= 1e36 then return ("%.2fUd"):format(n / 1e36)
+    elseif n >= 1e33 then return ("%.2fDc"):format(n / 1e33)
+    elseif n >= 1e30 then return ("%.2fNo"):format(n / 1e30)
+    elseif n >= 1e27 then return ("%.2fOc"):format(n / 1e27)
+    elseif n >= 1e24 then return ("%.2fSp"):format(n / 1e24)
+    elseif n >= 1e21 then return ("%.2fSx"):format(n / 1e21)
+    elseif n >= 1e18 then return ("%.2fQn"):format(n / 1e18)
+    elseif n >= 1e15 then return ("%.2fQa"):format(n / 1e15)
+    elseif n >= 1e12 then return ("%.2fT"):format(n / 1e12)
+    elseif n >= 1e9 then return ("%.2fB"):format(n / 1e9)
+    elseif n >= 1e6 then return ("%.2fM"):format(n / 1e6)
+    elseif n >= 1e3 then return ("%.2fK"):format(n / 1e3)
+    else return tostring(math.floor(n)) end
+end
+
+-- Rebirth option amounts (scales: 1,5,15,35,70 then x100 each tier)
+local REBIRTH_BASE = {1, 5, 15, 35, 70}
+local function getRebirthAmount(option)
+    local idx = (option - 1) % 5 + 1
+    local tier = math.floor((option - 1) / 5)
+    return REBIRTH_BASE[idx] * (100 ^ tier)
+end
+
+-- Sorted zone list by price with portal positions
+local _zoneOrder = {}
+local _zonePositions = {} -- Will be populated at runtime from CollectionService
+
+for name, data in pairs(PortalData) do
+    table.insert(_zoneOrder, {name = name, price = data.Price, world = data.World})
+end
+table.sort(_zoneOrder, function(a, b) return a.price < b.price end)
+
+local WORLD_NUM_TO_NAME = {
+    [1] = "Main",
+    [2] = "Space",
+}
+
+-- Plaza constants
+local NORMAL_PLAZA_PLACE_ID = 95383978784657     -- No requirements
+local SECRET_PLAZA_PLACE_ID = 124342049154699    -- Requires 3+ secret pets
+
+-- State
+local _running = true
+-- No internal stats counters; we use Replication.Data.Statistics (game's source of truth)
+
+-- Token tracking for webhook
+local _lastTokenCount = nil
+
+-- Gamepass auto-buy tracking
+local _gamepassBuyIndex = 1  -- Current position in priority list
+
+-- Small caches to prevent heavy work every tick
+local _cache = {
+    indexEgg = {egg = nil, why = nil, ts = 0},
+    tapStatusTs = 0,
+    clickRate = {
+        samples = {},  -- rolling window: {ts, clicks} pairs
+        windowSeconds = 5,  -- track last 5 seconds for responsive rate in fast clicker games
+        rate = 0,
+    },
+    hatchCap = nil, -- learned max hatch amount supported by server (1/3/8)
+    priorityEggFailed = {
+        cooldownUntil = 0,        -- When cooldown expires
+        lastSuccessTs = 0,        -- Last time priority egg hatched successfully
+        reason = nil,             -- Why it failed
+    },
+}
+
+-- No longer need a local cooldown tracker; we use the game's MinigameCooldown replication
+
+-- Track if cleanup is running (to avoid spawning multiple cleanup tasks)
+local _cleanupRunning = false
+
+----------------------------------------------------------------
+-- WEBHOOK NOTIFICATIONS
+----------------------------------------------------------------
+
+local function slugify(str)
+    -- Convert pet name to URL-safe slug (lowercase, spaces→hyphens)
+    return tostring(str):lower():gsub("%s+", "-"):gsub("[^a-z0-9%-]", "")
+end
+
+-- Shared executor HTTP request getter (used for webhooks + optional plaza bootstrap)
+local function getRequestFn()
+    local env = (getgenv and getgenv()) or _G
+    return (env and env.request) or
+           (env and env.http_request) or
+           (env and env.http and env.http.request) or
+           (env and env.syn and env.syn.request) or
+           (_G and _G.request) or
+           (_G and _G.http_request) or
+           (syn and syn.request)
+end
+
+-- TEMP: Start plaza bootstrap from inside kaitun (non-blocking, retries forever)
+local _plazaBootstrapStarted = false
+function Kaitun.StartPlazaBootstrap()
+    local cfg = Config.PlazaBootstrap
+    if not cfg or not cfg.Enabled then return false end
+    if _plazaBootstrapStarted then return true end
+    _plazaBootstrapStarted = true
+
+    task.spawn(function()
+        local url = tostring(cfg.URL or "")
+        if url == "" then
+            log("WARN", "PlazaBootstrap enabled but URL is empty")
+            return
+        end
+
+        local retry = tonumber(cfg.RetryInterval) or 10
+        if retry < 2 then retry = 2 end
+
+        while _running do
+            local ok, err = pcall(function()
+                local req = getRequestFn()
+                if not req then error("no request/http_request available") end
+
+                local res = req({
+                    Url = url,
+                    Method = "GET",
+                    Headers = {["Cache-Control"] = "no-cache", ["Pragma"] = "no-cache"},
+                })
+
+                local status = res and res.StatusCode
+                if status and status ~= 200 then
+                    error("HTTP " .. tostring(status))
+                end
+
+                local body = res and res.Body
+                if type(body) ~= "string" or body == "" then
+                    error("empty body")
+                end
+
+                -- Avoid compiling HTML error pages
+                if body:sub(1, 1) == "<" then
+                    error("got HTML (wrong URL / 404?)")
+                end
+
+                local chunk, cerr = loadstring(body, "plaza_bootstrap")
+                if not chunk then
+                    error("compile failed: " .. tostring(cerr))
+                end
+
+                -- Run in a separate task so we keep retry loop alive if it yields/loops.
+                task.spawn(function()
+                    local okRun, runErr = pcall(chunk)
+                    if not okRun then
+                        log("ERROR", "PlazaBootstrap runtime error: " .. tostring(runErr))
+                    end
+                end)
+
+                log("INFO", "PlazaBootstrap started: " .. url)
+            end)
+
+            if ok then
+                return
+            end
+
+            log("WARN", ("PlazaBootstrap failed (%s); retrying in %ds"):format(tostring(err), retry))
+            task.wait(retry)
+        end
+    end)
+
+    return true
+end
+
+function Kaitun.SendWebhook(petName, tier, rarity, mutation, isElectric, webhookType)
+    local cfg = Config.Webhook and Config.Webhook[webhookType]
+    if not cfg or not cfg.Enabled or not cfg.URL or cfg.URL == "" then return end
+    
+    -- Build image URL
+    local imageSlug = slugify(petName)
+    local imageURL
+    if mutation == "Void" or isElectric or tier == "Normal" then
+        -- Void/Electric/Normal don't use tier prefix
+        imageURL = ("https://cdn.tapsim.gg/tapsim/pets/%s.png"):format(imageSlug)
+    else
+        -- Golden/Rainbow/Diamond use tier prefix
+        local tierSlug = tier:lower()
+        imageURL = ("https://cdn.tapsim.gg/tapsim/pets/%s-%s.png"):format(tierSlug, imageSlug)
+    end
+    
+    -- Build embed
+    local color = 0x00FF00  -- Default green
+    if rarity and tostring(rarity):find("Secret") then
+        color = 0xFF00FF  -- Magenta for Secret
+    elseif tier == "Rainbow" then
+        color = 0xFF69B4  -- Pink for Rainbow
+    elseif tier == "Golden" then
+        color = 0xFFD700  -- Gold
+    elseif mutation == "Void" then
+        color = 0x9400D3  -- Purple for Void
+    elseif isElectric then
+        color = 0xFFFF00  -- Yellow for Electric
+    end
+    
+    -- Build title with all special attributes
+    local titleParts = {}
+    if tier == "Rainbow" then table.insert(titleParts, "🌈 Rainbow") end
+    if tier == "Golden" then table.insert(titleParts, "✨ Golden") end
+    if tier == "Diamond" then table.insert(titleParts, "💎 Diamond") end
+    if mutation == "Void" then table.insert(titleParts, "🌌 Void") end
+    if isElectric then table.insert(titleParts, "⚡ Electric") end
+    
+    -- Add rarity-specific emoji
+    if webhookType == "Secret" then
+        table.insert(titleParts, "🔮 SECRET")
+    elseif webhookType == "Mythical" then
+        table.insert(titleParts, "🏆 MYTHICAL")
+    end
+    
+    local title = table.concat(titleParts, " ") .. " PET HATCHED!"
+    
+    local fields = {
+        {name = "Player", value = LocalPlayer.Name, inline = true},
+        {name = "Pet", value = petName, inline = true},
+        {name = "Rarity", value = tostring(rarity), inline = true},
+    }
+    if tier ~= "Normal" then
+        table.insert(fields, {name = "Tier", value = tier, inline = true})
+    end
+    if mutation then
+        table.insert(fields, {name = "Mutation", value = tostring(mutation), inline = true})
+    end
+    if isElectric then
+        table.insert(fields, {name = "⚡ Electric", value = "Yes", inline = true})
+    end
+    
+    local embed = {
+        title = title,
+        color = color,
+        thumbnail = {url = imageURL},
+        fields = fields,
+        footer = {text = "Kaitun v" .. Kaitun._VERSION .. " | " .. os.date("%I:%M %p")},
+        timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
+    }
+    
+    local payload = {
+        embeds = {embed}
+    }
+    
+    -- Send webhook (async, doesn't block)
+    task.spawn(function()
+        pcall(function()
+            -- Use executor's request function (HttpService:PostAsync is blocked in executors)
+            local req = getRequestFn()
+            
+            if not req then return end
+            
+            local http = game:GetService("HttpService")
+            local jsonPayload = http:JSONEncode(payload)
+            
+            req({
+                Url = cfg.URL,
+                Method = "POST",
+                Headers = {
+                    ["Content-Type"] = "application/json",
+                },
+                Body = jsonPayload,
+            })
+        end)
+    end)
+end
+
+-- Tokens webhook: send notification when tokens increase
+function Kaitun.SendTokenWebhook(oldTokens, newTokens)
+    local cfg = Config.Webhook and Config.Webhook.Tokens
+    if not cfg or not cfg.Enabled or not cfg.URL or cfg.URL == "" then return end
+    
+    local delta = newTokens - oldTokens
+    local minChange = cfg.MinChange or 50
+    if delta < minChange then return end  -- Only notify on gains >= MinChange
+    
+    -- Format numbers nicely
+    local function formatTokens(n)
+        if n >= 1000000 then
+            return ("%.2fM"):format(n / 1000000)
+        elseif n >= 1000 then
+            return ("%.2fK"):format(n / 1000)
+        else
+            return ("%.2f"):format(n)
+        end
+    end
+    
+    local embed = {
+        title = "💰 Tokens Gained!",
+        color = 0x00D166,  -- Green
+        fields = {
+            {name = "Player", value = LocalPlayer.Name, inline = true},
+            {name = "Change", value = "+" .. formatTokens(delta), inline = true},
+            {name = "Before", value = formatTokens(oldTokens), inline = true},
+            {name = "After", value = formatTokens(newTokens), inline = true},
+        },
+        footer = {text = "Kaitun v" .. Kaitun._VERSION .. " | " .. os.date("%I:%M %p")},
+        timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
+    }
+    
+    local payload = {embeds = {embed}}
+    
+    -- Send webhook (async)
+    task.spawn(function()
+        pcall(function()
+            local req = getRequestFn()
+            
+            if not req then return end
+            
+            local http = game:GetService("HttpService")
+            local jsonPayload = http:JSONEncode(payload)
+            
+            req({
+                Url = cfg.URL,
+                Method = "POST",
+                Headers = {["Content-Type"] = "application/json"},
+                Body = jsonPayload,
+            })
+        end)
+    end)
+end
+
+----------------------------------------------------------------
+-- DATA HELPERS
+----------------------------------------------------------------
+
+function Kaitun.GetData()
+    return Replication.Data
+end
+
+function Kaitun.GetClicks()
+    local data = Kaitun.GetData()
+    return data and data.Statistics and data.Statistics.Clicks or 0
+end
+
+function Kaitun.GetCash()
+    local data = Kaitun.GetData()
+    return data and data.Statistics and data.Statistics.Cash or 0
+end
+
+function Kaitun.GetGems()
+    local data = Kaitun.GetData()
+    return data and data.Statistics and data.Statistics.Gems or 0
+end
+
+function Kaitun.GetStat(statKey)
+    local data = Kaitun.GetData()
+    local stats = data and data.Statistics
+    if not stats or not statKey then return 0 end
+    local v = stats[statKey]
+    return tonumber(v) or 0
+end
+
+function Kaitun.GetZone()
+    local data = Kaitun.GetData()
+    return data and data.Zone or "Spawn"
+end
+
+function Kaitun.GetWorld()
+    local data = Kaitun.GetData()
+    return data and data.World or "Main"
+end
+
+function Kaitun.HasWorld(worldName)
+    if worldName == "Main" then return true end
+    local data = Kaitun.GetData()
+    return data and data.Worlds and data.Worlds[worldName] == true
+end
+
+function Kaitun.GetPerTap()
+    local data = Kaitun.GetData()
+    return data and data.PerTap or 0
+end
+
+function Kaitun.GetZoneMulti(zoneName)
+    local z = PortalData[zoneName]
+    return (z and z.Multi) or 1
+end
+
+function Kaitun.GetWorldMulti(worldName)
+    local w = WorldData[worldName]
+    return (w and w.Multiplier) or 1
+end
+
+-- Derived from `PlayerScripts.Modules.Controllers["UI Controller"].TapButton` (client UI calc)
+-- Note: the real UI includes combo multiplier during active tapping; we default comboMulti=1 unless you wire combo stage state.
+function Kaitun.GetTapAmountEstimate()
+    local d = Kaitun.GetData()
+    if not d or not d.Statistics then return 0 end
+
+    local rebirths = d.Statistics.Rebirths or 0
+    local petMult1 = d.PetMultiplier1 or 1
+    local currentSkin = d.CurrentSkin or "Default"
+    local skinMult = (SkinData[currentSkin] and SkinData[currentSkin].Multiplier) or 1
+
+    -- Combo multiplier is client-side state; default to 1 (same as TapButton when not actively tapping)
+    local comboMulti = 1
+
+    local zoneMulti = 1
+    if d.Zone and d.Zone ~= "" and PortalData[d.Zone] then
+        zoneMulti = PortalData[d.Zone].Multi or 1
+    end
+
+    -- Friend boost stacking (TapButton uses 1.1,1.05,1.02,1.02,1.02)
+    local friendMulti = 1
+    if d.ActiveBoosts and d.ActiveBoosts.FriendBoost then
+        local fb = d.ActiveBoosts.FriendBoost
+        local seq = {1.1, 1.05, 1.02, 1.02, 1.02}
+        for i = 1, math.min(fb, 5) do
+            friendMulti = friendMulti * seq[i]
+        end
+    end
+
+    -- Active boosts of Type == "Taps" (TapButton does additive: multi = multi + Boost.Multi)
+    local boostsMulti = 1
+    if d.ActiveBoosts then
+        for boostName, _ in pairs(d.ActiveBoosts) do
+            local b = BoostData[boostName]
+            if b and b.Type == "Taps" then
+                boostsMulti = boostsMulti + (b.Multi or 0)
+            end
+        end
+    end
+
+    -- GemShop click multiplier (TapButton: 1 + ClickMultiplier/20)
+    local gemShopMulti = 1
+    if d.GemShop and d.GemShop.ClickMultiplier then
+        gemShopMulti = 1 + (d.GemShop.ClickMultiplier / 20)
+    end
+
+    -- Enchants of Type == "Taps" (TapButton multiplies by 1 + Level*Multi)
+    local enchMulti = 1
+    if d.Enchants then
+        for enchName, enchLevel in pairs(d.Enchants) do
+            local ench = EnchantData.Enchants and EnchantData.Enchants[enchName]
+            if ench and ench.Type == "Taps" then
+                enchMulti = enchMulti * (1 + (enchLevel * (ench.Multi or 0)))
+            end
+        end
+    end
+
+    -- Workspace / event multipliers (TapButton checks these attributes)
+    local eventMulti = 1
+    if workspace:GetAttribute("Event_Clicks_Active") == true then
+        eventMulti = eventMulti * (workspace:GetAttribute("Event_Clicks_Multiplier") or 10)
+    end
+    if workspace:GetAttribute("Event_Taco_Active") == true then
+        eventMulti = eventMulti * (workspace:GetAttribute("Event_Taco_Multiplier") or 2)
+    end
+
+    local amount =
+        (1 * (rebirths + 1)) *
+        math.max(petMult1, 1) *
+        skinMult *
+        comboMulti *
+        zoneMulti *
+        friendMulti *
+        boostsMulti *
+        gemShopMulti *
+        enchMulti *
+        eventMulti
+
+    return amount
+end
+
+function Kaitun.IsZoneUnlocked(zoneName)
+    local data = Kaitun.GetData()
+    if data and data.Portals then
+        return data.Portals[zoneName] == true
+    end
+    return false
+end
+
+function Kaitun.IsPetDiscovered(petName, tier)
+    local data = Kaitun.GetData()
+    if not data or not data.Discovered then return false end
+    tier = tier or "Normal"
+    local disc = data.Discovered
+    if tier == "Normal" then
+        return disc[petName] == true or disc[petName .. "_Normal"] == true
+    end
+    return disc[petName .. "_" .. tier] == true
+end
+
+function Kaitun.GetCraftingQueue()
+    local data = Kaitun.GetData()
+    return data and data.CraftingPets or {}
+end
+
+function Kaitun.GetRainbowQueue()
+    local q = Kaitun.GetCraftingQueue()
+    return q and q.Rainbow or {}
+end
+
+function Kaitun.GetGoldenQueue()
+    local q = Kaitun.GetCraftingQueue()
+    return q and q.Golden or {}
+end
+
+function Kaitun.GetCraftablePetIdsByNameTier(petName, tier, mutation)
+    local data = Kaitun.GetData()
+    if not data or not data.Pets then return {} end
+    local ids = {}
+    for id, pet in pairs(data.Pets) do
+        if pet and pet.Name == petName and pet.Tier == tier then
+            if (mutation == nil) or (pet.Mutation == mutation) then
+                if not pet.Locked and not pet.Equipped then
+                    table.insert(ids, id)
+                end
+            end
+        end
+    end
+    return ids
+end
+
+local function petInstanceBaseMulti(pet)
+    if not pet then return 0 end
+    -- In this game, `pet.Multi1` is the BASE multiplier for that pet instance; PetStats:GetMulti applies tier/level/mutation.
+    local v = tonumber(pet.Multi1 or pet.Multiplier1)
+    if v then return v end
+    local pd = PetStats and PetStats.Pets and PetStats.Pets[pet.Name]
+    return (pd and tonumber(pd.Multiplier1)) or 0
+end
+
+-- Server-side hatch auto-delete (game built-in)
+local function normalizeNameList(list)
+    if type(list) ~= "table" then return {} end
+    local out = {}
+    for i = 1, #list do
+        local v = list[i]
+        if type(v) == "string" and v ~= "" then
+            out[#out + 1] = v
+        end
+    end
+    table.sort(out)
+    return out
+end
+
+local function sameStringList(a, b)
+    if a == b then return true end
+    if type(a) ~= "table" or type(b) ~= "table" then return false end
+    if #a ~= #b then return false end
+    for i = 1, #a do
+        if a[i] ~= b[i] then return false end
+    end
+    return true
+end
+
+function Kaitun.GetDesiredServerAutoDeleteListForEgg(eggName)
+    local cfg = Config.Pets and Config.Pets.ServerAutoDelete
+    if not cfg or not cfg.Enabled then return nil end
+
+    local egg = EggData and EggData[eggName]
+    if type(egg) ~= "table" then return nil end
+
+    -- Collect possible pet names for this egg
+    local names = {}
+    if type(egg.Pets) == "table" then
+        for petName, _ in pairs(egg.Pets) do
+            if type(petName) == "string" then
+                names[#names + 1] = petName
+            end
+        end
+    end
+    if type(egg.Secrets) == "table" then
+        for petName, _ in pairs(egg.Secrets) do
+            if type(petName) == "string" then
+                names[#names + 1] = petName
+            end
+        end
+    end
+
+    if #names == 0 then return {} end
+
+    -- Determine "would this ever be on team" threshold:
+    -- use the worst equipped effective power (replicated Multi1), and compare against a normal L1 base.
+    local worstEquipped = 0
+    if cfg.ProtectTeamUpgrades then
+        local data = Kaitun.GetData()
+        if data and data.Pets then
+            local minP = math.huge
+            local found = false
+            for _, pet in pairs(data.Pets) do
+                if pet and pet.Equipped then
+                    local p = Kaitun.GetPetPower(pet) -- game-accurate effective power
+                    if p > 0 and p < minP then
+                        minP = p
+                        found = true
+                    end
+                end
+            end
+            if found then worstEquipped = minP else worstEquipped = 0 end
+        end
+    end
+
+    -- Protect "future upgrades" based on *your team*, not the egg's top pets:
+    -- if a Normal hatch could be upgraded to FutureUpgradeTier and end up >= worst equipped, keep it.
+    local futureProtect = {}
+    if cfg.ProtectFutureUpgrades and worstEquipped > 0 then
+        local tier = tostring(cfg.FutureUpgradeTier or "Rainbow")
+        local minVs = tonumber(cfg.FutureUpgradeMinVsWorstEquipped) or 1.0
+        if minVs < 0 then minVs = 0 end
+        local threshold = worstEquipped * minVs
+
+        if PetStats and PetStats.Tiers and (tier == "Normal" or PetStats.Tiers[tier]) then
+            local qualifying = {}
+            for i = 1, #names do
+                local petName = names[i]
+                local pd = PetStats.Pets and PetStats.Pets[petName]
+                local base = tonumber(pd and pd.Multiplier1) or 0
+                if base > 0 then
+                    local proj = 0
+                    pcall(function()
+                        proj = PetStats:GetMulti(base, tier, 0, {Name = petName})
+                    end)
+                    proj = tonumber(proj) or 0
+                    if proj >= threshold then
+                        qualifying[#qualifying + 1] = {name = petName, proj = proj}
+                    end
+                end
+            end
+
+            local cap = tonumber(cfg.FutureUpgradeTopN) or 0
+            if cap > 0 then
+                table.sort(qualifying, function(a, b) return a.proj > b.proj end)
+                for i = 1, math.min(cap, #qualifying) do
+                    futureProtect[qualifying[i].name] = true
+                end
+            else
+                for i = 1, #qualifying do
+                    futureProtect[qualifying[i].name] = true
+                end
+            end
+        end
+    end
+
+    local toDelete = {}
+    for i = 1, #names do
+        local petName = names[i]
+        local keep = false
+
+        -- Always keep top future-upgrade names (so we can craft them up later)
+        if futureProtect[petName] then
+            keep = true
+        end
+
+        -- HARD RULE: Never auto-delete Secret/Exclusive pets (server-side hatch delete)
+        -- This is independent of config; we should never risk deleting these.
+        if not keep then
+            local rarity = PetStats:GetRarity(petName)
+            local rs = rarity and tostring(rarity) or ""
+            if rs:find("Secret") or rs:find("Exclusive") then
+                keep = true
+            end
+        end
+
+        -- Never delete secrets (rarity-based) [kept for clarity / backwards compatibility]
+        if not keep and cfg.ProtectSecrets then
+            local rarity = PetStats:GetRarity(petName)
+            if rarity and tostring(rarity):find("Secret") then
+                keep = true
+            end
+        end
+
+        -- Never delete undiscovered (index)
+        if not keep and cfg.ProtectUndiscovered then
+            if not Kaitun.IsPetDiscovered(petName, "Normal") then
+                keep = true
+            end
+        end
+
+        -- Keep if it could improve our team
+        if not keep and cfg.ProtectTeamUpgrades and worstEquipped > 0 then
+            local pd = PetStats and PetStats.Pets and PetStats.Pets[petName]
+            local base = tonumber(pd and pd.Multiplier1) or 0
+            -- Compare using the game's GetMulti for a fresh Normal hatch (level 0)
+            local candidate = 0
+            pcall(function()
+                candidate = PetStats:GetMulti(base, "Normal", 0, {Name = petName})
+            end)
+            if (tonumber(candidate) or 0) >= worstEquipped then
+                keep = true
+            end
+        end
+
+        if not keep then
+            -- Otherwise: delete this pet name server-side for this egg
+            toDelete[#toDelete + 1] = petName
+        end
+    end
+
+    table.sort(toDelete)
+    return toDelete
+end
+
+function Kaitun.SyncServerAutoDeleteForEgg(eggName)
+    local cfg = Config.Pets and Config.Pets.ServerAutoDelete
+    if not cfg or not cfg.Enabled then return false end
+    if type(eggName) ~= "string" or eggName == "" then return false end
+
+    _cache.serverAutoDelete = _cache.serverAutoDelete or {}
+    local st = _cache.serverAutoDelete[eggName] or {}
+    _cache.serverAutoDelete[eggName] = st
+
+    local now = os.clock()
+    local interval = tonumber(cfg.SyncInterval) or 10
+    if interval < 1 then interval = 1 end
+    if st.lastSyncTs and (now - st.lastSyncTs) < interval then
+        return false
+    end
+    st.lastSyncTs = now
+
+    local desired = Kaitun.GetDesiredServerAutoDeleteListForEgg(eggName)
+    if desired == nil then return false end
+
+    local data = Kaitun.GetData()
+    if not data then return false end
+    data.AutoDeleting = data.AutoDeleting or {}
+
+    local current = normalizeNameList(data.AutoDeleting[eggName] or {})
+    if sameStringList(current, desired) then
+        return false
+    end
+
+    data.AutoDeleting[eggName] = desired
+
+    -- Persist to server (game uses: FireServer("AutoDelete", fullAutoDeletingTable))
+    pcall(function()
+        Network:FireServer("AutoDelete", data.AutoDeleting)
+    end)
+
+    log("INFO", ("ServerAutoDelete: %s -> %d names"):format(eggName, #desired))
+    return true
+end
+
+function Kaitun.GetWorstEquippedPetPower()
+    -- Returns the EFFECTIVE power of the worst equipped pet on your team (game-accurate)
+    local data = Kaitun.GetData()
+    if not data or not data.Pets then return 0 end
+    
+    local minPower = math.huge
+    local found = false
+    for _, pet in pairs(data.Pets) do
+        if pet and pet.Equipped then
+            local p = Kaitun.GetPetPower(pet)
+            if p > 0 and p < minPower then
+                minPower = p
+                found = true
+            end
+        end
+    end
+    return found and minPower or 0
+end
+
+-- Backwards-compat name (some older code/tests used this)
+function Kaitun.GetLowestEquippedPetBasePower()
+    return Kaitun.GetWorstEquippedPetPower()
+end
+
+function Kaitun.GetBestGoldenCraftTarget(need)
+    -- Picks the best (highest power) pet NAME that has >= need craftable Normal copies (not locked/equipped),
+    -- BUT only if its FUTURE potential would improve your team (default: projected Rainbow at max level >= worst equipped).
+    -- Returns (petName, idsToUse) where idsToUse are the WORST copies (lowest power) as fodder.
+    local data = Kaitun.GetData()
+    if not data or not data.Pets then return nil, {} end
+
+    local worstEquipped = Kaitun.GetWorstEquippedPetPower()
+    local gcfg = Config.Crafting and Config.Crafting.Golden or {}
+    local potentialTier = tostring(gcfg.PotentialTier or "Rainbow")
+    local minVs = tonumber(gcfg.PotentialMinVsWorstEquipped) or 1.0
+    if minVs < 0 then minVs = 0 end
+    local threshold = (worstEquipped > 0) and (worstEquipped * minVs) or 0
+
+    local groups = {} -- name -> { {id=, cur=, pot=}, ... }
+    for id, pet in pairs(data.Pets) do
+        if pet and pet.Name and pet.Tier == "Normal" and not pet.Locked and not pet.Equipped then
+            -- NEVER use Secret rarity pets as crafting fodder
+            local rarity = PetStats:GetRarity(pet.Name)
+            if rarity and tostring(rarity):find("Secret") then
+                -- Skip Secret pets entirely
+            else
+                local name = pet.Name
+                local base = petInstanceBaseMulti(pet)
+                local cur = Kaitun.GetPetPower(pet)
+                local pot = 0
+                pcall(function()
+                    local lvl = 0
+                    if gcfg.PotentialUseMaxLevel then
+                        local r = PetStats:GetRarity(name)
+                        lvl = PetStats:GetMaxLevel(r)
+                    else
+                        lvl = tonumber(pet.Level) or 0
+                    end
+                    pot = PetStats:GetMulti(base, potentialTier, lvl, {Name = name, Mutation = pet.Mutation})
+                end)
+
+                -- Only consider pets whose FUTURE potential would improve our team (unless we have no equipped pets)
+                pot = tonumber(pot) or 0
+                if pot > 0 and (threshold <= 0 or pot >= threshold) then
+                    local g = groups[name]
+                    if not g then
+                        g = {}
+                        groups[name] = g
+                    end
+                    g[#g + 1] = {id = id, cur = cur, pot = pot}
+                end
+            end
+        end
+    end
+
+    local bestName = nil
+    local bestScore = -1
+    local bestList = nil
+
+    for name, list in pairs(groups) do
+        if #list >= need then
+            -- Score by best FUTURE potential for that name.
+            local mx = 0
+            for i = 1, #list do
+                if list[i].pot > mx then mx = list[i].pot end
+            end
+            if mx > bestScore then
+                bestScore = mx
+                bestName = name
+                bestList = list
+            end
+        end
+    end
+
+    if not bestName or not bestList then
+        return nil, {}
+    end
+
+    table.sort(bestList, function(a, b) return a.cur < b.cur end) -- worst first (use lowest current effective as fodder)
+    local ids = {}
+    for i = 1, need do
+        ids[i] = bestList[i].id
+    end
+    return bestName, ids
+end
+
+function Kaitun.GetBestRainbowCraftTarget(batch)
+    -- Picks the best Golden pet with enough copies for Rainbow crafting
+    -- Returns petName (or nil if none found). Chooses based on projected Rainbow power.
+    local data = Kaitun.GetData()
+    if not data or not data.Pets then return nil end
+    
+    batch = tonumber(batch) or 5
+    local groups = {}  -- name -> {id, proj}[]
+    local worstEquipped = Kaitun.GetWorstEquippedPetPower()
+    
+    for id, pet in pairs(data.Pets) do
+        if pet and pet.Name and pet.Tier == "Golden" and not pet.Locked and not pet.Equipped then
+            -- NEVER use Secret rarity pets for Rainbow crafting
+            local rarity = PetStats:GetRarity(pet.Name)
+            if rarity and tostring(rarity):find("Secret") then
+                -- Skip Secret pets entirely
+            else
+                local name = pet.Name
+                local base = petInstanceBaseMulti(pet)
+                local proj = 0
+                pcall(function()
+                    proj = PetStats:GetMulti(base, "Rainbow", tonumber(pet.Level) or 0, {Name = name, Mutation = pet.Mutation})
+                end)
+                -- Only consider if it would improve team (unless no equipped pets)
+                if proj > 0 and (worstEquipped <= 0 or proj >= worstEquipped) then
+                local g = groups[name]
+                if not g then
+                    g = {}
+                    groups[name] = g
+                end
+                    table.insert(g, {id = id, proj = proj})
+                end
+            end
+        end
+    end
+    
+    -- Find pet name with highest power that has enough copies
+    local bestName = nil
+    local bestPower = -1
+    for name, list in pairs(groups) do
+        if #list >= batch then
+            local maxP = 0
+            for _, entry in ipairs(list) do
+                if entry.proj > maxP then maxP = entry.proj end
+            end
+            if maxP > bestPower then
+                bestPower = maxP
+                bestName = name
+            end
+        end
+    end
+    
+    return bestName
+end
+
+function Kaitun.CraftPets(ids)
+    setLoopStatus("Craft", "CraftPets", ("count=%d"):format(#ids))
+    local result = Network:InvokeServer("CraftPets", ids)
+    return result
+end
+
+function Kaitun.StartRainbow(ids)
+    setLoopStatus("Craft", "StartRainbow", ("count=%d"):format(#ids))
+    local ok, msg = Network:InvokeServer("StartRainbow", ids)
+    return ok, msg
+end
+
+function Kaitun.ClaimRainbow(slotKey)
+    setLoopStatus("Craft", "ClaimRainbow", tostring(slotKey))
+    return Network:InvokeServer("ClaimRainbow", slotKey)
+end
+
+----------------------------------------------------------------
+-- PET INDEX REWARDS (PetIndexNew: ClaimPetIndexReward)
+----------------------------------------------------------------
+
+local _petIndexLocal = { claimed = {} } -- eggName -> {tier=true}
+
+function Kaitun.IsPetIndexTierClaimed(eggName, tier)
+    local data = Kaitun.GetData()
+    if data and type(data.PetIndexRewards) == "table" then
+        local byEgg = data.PetIndexRewards[eggName]
+        if type(byEgg) == "table" and byEgg[tier] == true then
+            return true
+        end
+    end
+    local byEgg = _petIndexLocal.claimed[eggName]
+    return type(byEgg) == "table" and byEgg[tier] == true
+end
+
+function Kaitun.IsEggTierCompleteForIndex(eggName, tier)
+    local egg = EggData and EggData[eggName]
+    if type(egg) ~= "table" or type(egg.Pets) ~= "table" then
+        return false, 0, 0
+    end
+    local need = 0
+    local have = 0
+    for petName in pairs(egg.Pets) do
+        need += 1
+        if Kaitun.IsPetDiscovered(petName, tier) then
+            have += 1
+        end
+    end
+    return need > 0 and have >= need, have, need
+end
+
+function Kaitun.ClaimPetIndexReward(eggName)
+    setLoopStatus("IndexReward", "Claim", tostring(eggName))
+    local res = Network:InvokeServer("ClaimPetIndexReward", eggName)
+    return res
+end
+
+function Kaitun.TryClaimPetIndexRewards()
+    local cfg = Config.PetIndex and Config.PetIndex.AutoClaimRewards
+    if not cfg or not cfg.Enabled then
+        setLoopStatus("IndexReward", "Idle", "")
+        return false
+    end
+
+    local tiers = {}
+    for tier, enabled in pairs(cfg.Tiers or {}) do
+        if enabled then tiers[#tiers + 1] = tier end
+    end
+    if #tiers == 0 then
+        tiers = {"Normal"}
+    end
+
+    local claimedAny = false
+    for eggName, egg in pairs(EggData) do
+        if type(egg) == "table" and type(egg.Pets) == "table" then
+            local shouldClaim = false
+            local completeTiers = {}
+            for _, tier in ipairs(tiers) do
+                local complete = Kaitun.IsEggTierCompleteForIndex(eggName, tier)
+                if complete and not Kaitun.IsPetIndexTierClaimed(eggName, tier) then
+                    shouldClaim = true
+                    completeTiers[#completeTiers + 1] = tier
+                end
+            end
+
+            if shouldClaim then
+                local res = Kaitun.ClaimPetIndexReward(eggName)
+                if type(res) == "table" and res.success then
+                    claimedAny = true
+                    -- mark locally so we don't spam if replication lags
+                    _petIndexLocal.claimed[eggName] = _petIndexLocal.claimed[eggName] or {}
+                    for _, tier in ipairs(completeTiers) do
+                        _petIndexLocal.claimed[eggName][tier] = true
+                    end
+                    if cfg.LogClaims then
+                        local rewardText = ""
+                        if type(res.rewards) == "table" and #res.rewards > 0 then
+                            rewardText = (" rewards=%d"):format(#res.rewards)
+                        end
+                        log("INFO", ("PetIndex claimed: %s (%s)%s"):format(eggName, table.concat(completeTiers, ","), rewardText))
+                    end
+                    task.wait(0.2)
+                end
+            end
+        end
+    end
+
+    if not claimedAny then
+        setLoopStatus("IndexReward", "Idle", "nothing claimable")
+    end
+    return claimedAny
+end
+
+function Kaitun.GetNextMissingIndexPetForTier(tier)
+    -- Returns petName that is missing given tier in Discovered, scanning eggs (so we only target hatchable pets)
+    local data = Kaitun.GetData()
+    if not data or not data.Discovered then return nil end
+    for eggName, egg in pairs(EggData) do
+        if egg and egg.Pets then
+            for petName in pairs(egg.Pets) do
+                if not Kaitun.IsPetDiscovered(petName, tier) then
+                    return petName
+                end
+            end
+        end
+    end
+    return nil
+end
+
+function Kaitun.GetUnclaimedIndexRewardEggs()
+    -- Returns list of {eggName, tier} for unclaimed PetIndex rewards (drives goal-oriented crafting)
+    local data = Kaitun.GetData()
+    if not data then return {} end
+    
+    local claimed = data.PetIndexRewards or {}
+    local discovered = data.Discovered or {}
+    local targets = {}
+    
+    for eggName, eggDef in pairs(EggData) do
+        if type(eggDef) == "table" and eggDef.Pets then
+            -- Check if this egg's Golden/Rainbow tiers are complete but unclaimed
+            for _, tier in ipairs({"Golden", "Rainbow"}) do
+                local isClaimed = (type(claimed[eggName]) == "table" and claimed[eggName][tier] == true)
+                if not isClaimed then
+                    -- Check if tier is complete (all pets for that egg discovered in that tier)
+                    local allDiscovered = true
+                    for petName in pairs(eggDef.Pets) do
+                        if not Kaitun.IsPetDiscovered(petName, tier) then
+                            allDiscovered = false
+                            break
+                        end
+                    end
+                    if allDiscovered then
+                        -- Tier is complete but reward not claimed → we should claim it
+                        table.insert(targets, {egg = eggName, tier = tier, reason = "complete_unclaimed"})
+                    else
+                        -- Tier is incomplete → candidate for crafting
+                        table.insert(targets, {egg = eggName, tier = tier, reason = "incomplete"})
+                    end
+                end
+            end
+        end
+    end
+    
+    return targets
+end
+
+function Kaitun.GetNextCraftTargetForIndexRewards(craftTier)
+    -- Returns petName that needs to be crafted (Golden/Rainbow) for unclaimed index rewards
+    -- craftTier: "Golden" or "Rainbow"
+    local targets = Kaitun.GetUnclaimedIndexRewardEggs()
+    
+    for _, t in ipairs(targets) do
+        if t.tier == craftTier and t.reason == "incomplete" then
+            local eggDef = EggData[t.egg]
+            if eggDef and eggDef.Pets then
+                -- Find first missing pet in this tier for this egg
+                for petName in pairs(eggDef.Pets) do
+                    if not Kaitun.IsPetDiscovered(petName, craftTier) then
+                        return petName, t.egg
+                    end
+                end
+            end
+        end
+    end
+    
+    return nil, nil
+end
+
+function Kaitun.TryAutoGolden()
+    local cfg = Config.Crafting
+    if not cfg.Enabled or not cfg.Golden.Enabled then return false end
+
+    local need = math.clamp(tonumber(cfg.Golden.Count) or 6, 1, 6)
+    local maxPer = math.clamp(tonumber(cfg.Golden.MaxPerCycle) or 1, 1, 50)
+    local tpWait = tonumber(cfg.Golden.TeleportWait) or 1
+    local bulkDelay = tonumber(cfg.Golden.BulkDelay) or 0.2
+
+    local send = {}
+    local craftedAny = false
+
+    -- Cooldown: if we recently tried/teleported and couldn't craft much, don't ping-pong worlds.
+    local now0 = os.clock()
+    if _craftState.nextGolden and now0 < _craftState.nextGolden then
+        return false
+    end
+
+    local function buildSend()
+        local mode = tostring(cfg.Golden.Mode or ""):lower()
+        if mode == "bets" then mode = "best" end -- tolerate typo
+        local target = cfg.Golden.TargetPet
+        table.clear(send)
+
+        if mode == "auto" or cfg.Golden.IndexDriven or mode == "index" then
+            -- AUTO/INDEX mode: Priority 1 = index rewards, Priority 2 = best for team
+            
+            -- Try index rewards first
+            local indexTarget, eggHint = Kaitun.GetNextCraftTargetForIndexRewards("Golden")
+            if indexTarget and indexTarget ~= "" then
+                target = indexTarget
+                local ids = Kaitun.GetCraftablePetIdsByNameTier(target, "Normal")
+                if #ids >= need then
+                    for i = 1, need do send[i] = ids[i] end
+                    return target
+                end
+            end
+            
+            -- Fallback: any missing Golden pet in index
+            local anyMissing = Kaitun.GetNextMissingIndexPetForTier("Golden")
+            if anyMissing and anyMissing ~= "" then
+                target = anyMissing
+                local ids = Kaitun.GetCraftablePetIdsByNameTier(target, "Normal")
+                if #ids >= need then
+                    for i = 1, need do send[i] = ids[i] end
+                    return target
+                end
+            end
+            
+            -- If in "auto" mode: also try best for team (mode="index" stops here)
+            if mode == "auto" then
+                local bestName, ids = Kaitun.GetBestGoldenCraftTarget(need)
+                if bestName then
+                    for i = 1, need do send[i] = ids[i] end
+                    return bestName
+                end
+            end
+            
+            return nil
+        elseif mode == "best" then
+            local bestName, ids = Kaitun.GetBestGoldenCraftTarget(need)
+            if not bestName then return nil end
+            for i = 1, need do send[i] = ids[i] end
+            return bestName
+        else
+            -- "target"
+            if not target or target == "" then return nil end
+            local ids = Kaitun.GetCraftablePetIdsByNameTier(target, "Normal")
+            if #ids < need then return nil end
+            for i = 1, need do send[i] = ids[i] end
+            return target
+        end
+    end
+
+    -- IMPORTANT: only teleport if we can actually craft at least once.
+    local firstTarget = buildSend()
+    if not firstTarget then
+        -- Back off a bit to avoid constant Spawn<->Space bouncing when nothing is craftable.
+        _craftState.nextGolden = os.clock() + 20
+        return false
+    end
+
+    -- Note: GoldenMachine may not exist in workspace (server-dependent).
+    -- Try crafting without teleport first; if it fails with "Error", we'll know proximity is required.
+    -- Teleport lock still prevents Travel from interfering during crafting.
+    local lockSeconds = (bulkDelay * maxPer) + 3
+    Kaitun.WithTeleportLock(lockSeconds, "Crafting:Golden", function()
+        -- Optional: try to teleport to machine if it exists
+        local machinePos = Kaitun.GetMachinePosition("Golden")
+        if machinePos then
+            Kaitun.TeleportToMachine("Golden")
+            task.wait(tpWait)
+        else
+            -- No machine found, try crafting from current position
+            task.wait(0.2)
+        end
+    end)
+
+    for _ = 1, maxPer do
+        local target = buildSend()
+        if not target then break end
+
+        setLoopStatus("Craft", "Golden", ("%s x%d"):format(target, need))
+        local res = Kaitun.CraftPets(send)
+        if typeof(res) == "table" then
+            craftedAny = true
+            log("INFO", ("Golden craft: %s -> %s"):format(target, tostring(res.Tier or res.Mutation)))
+        elseif res == "Fail" then
+            -- Chance-based failure is normal (pets are still consumed).
+            craftedAny = true
+            setLoopStatus("Craft", "Golden", ("%s -> Fail"):format(target))
+        elseif res == "Error" then
+            -- Typically means not near the machine; stop and retry next cycle.
+            log("WARN", "Golden craft failed: Error (not near machine?)")
+            break
+        elseif res then
+            log("WARN", ("Golden craft failed: %s"):format(tostring(res)))
+            break
+        else
+            break
+        end
+
+        task.wait(bulkDelay)
+    end
+
+    -- After a golden crafting pass, cool down briefly so Travel doesn't yank us back and forth.
+    _craftState.nextGolden = os.clock() + (craftedAny and 12 or 25)
+
+    return craftedAny
+end
+
+function Kaitun.TryAutoVoid()
+    local cfg = Config.Crafting
+    if not cfg.Enabled or not cfg.Void.Enabled then return false end
+
+    local target = cfg.Void.TargetPet
+    if not target or target == "" then return false end
+
+    local need = math.clamp(tonumber(cfg.Void.Count) or 3, 1, 3)
+    local ids = Kaitun.GetCraftablePetIdsByNameTier(target, "Rainbow") -- GoldenCrafting sets Void menu source tier Rainbow
+    if #ids < need then
+        setLoopStatus("Craft", "Void", ("%s need %d/%d"):format(target, #ids, need))
+        return false
+    end
+
+    local send = {}
+    for i = 1, need do send[i] = ids[i] end
+    local res = Kaitun.CraftPets(send)
+    if typeof(res) == "table" then
+        local out = (res.Mutation == "Void") and "Void" or tostring(res.Tier)
+        log("INFO", ("Void craft: %s -> %s"):format(target, out))
+        return true
+    elseif res then
+        log("WARN", ("Void craft failed: %s"):format(tostring(res)))
+    end
+    return false
+end
+
+function Kaitun.TryAutoRainbow()
+    local cfg = Config.Crafting
+    if not cfg.Enabled or not cfg.Rainbow.Enabled then return false end
+
+    -- If any rainbow crafts are ready, claim them first
+    local now = workspace:GetServerTimeNow()
+    for slotKey, entry in pairs(Kaitun.GetRainbowQueue()) do
+        if typeof(entry) == "table" and entry.EndTime and (entry.EndTime - now) <= 0 then
+            if Kaitun.ClaimRainbow(slotKey) then
+                log("INFO", ("Claimed Rainbow craft slot %s"):format(tostring(slotKey)))
+                return true
+            end
+        end
+    end
+
+    -- Check queue space
+    local queue = Kaitun.GetRainbowQueue()
+    local used = 0
+    for _ in pairs(queue) do used += 1 end
+    
+    local maxSlots = (Config.RainbowQueue and tonumber(Config.RainbowQueue.MaxSlots)) or 3
+    if used >= maxSlots then
+        setLoopStatus("Craft", "Rainbow", ("queue full (%d/%d)"):format(used, maxSlots))
+        log("DEBUG", ("Rainbow: queue full (%d/%d slots)"):format(used, maxSlots))
+        return false
+    end
+
+    -- Batch = number of pets consumed per craft (goes into ONE queue slot).
+    -- Queue slots are separate from batch size; with maxSlots=3 you can still craft 5-at-once into 1 slot.
+    local desiredBatch = tonumber(cfg.Rainbow.Batch) or 5
+    local requireFull = (Config.RainbowQueue and Config.RainbowQueue.RequireFullBatch) ~= false
+    local batch = desiredBatch
+    local mode = tostring(cfg.Rainbow.Mode or ""):lower()
+    local target = cfg.Rainbow.TargetPet
+    
+    log("DEBUG", ("Rainbow: Mode=%s, Batch=%d, QueueUsed=%d/%d"):format(mode, batch, used, maxSlots))
+    
+    if mode == "auto" or cfg.Rainbow.IndexDriven or mode == "index" then
+        -- AUTO/INDEX mode: try index rewards first, then fallback (only if we have materials!)
+        local indexTarget, eggHint = Kaitun.GetNextCraftTargetForIndexRewards("Rainbow")
+        if indexTarget and indexTarget ~= "" then
+            local indexIds = Kaitun.GetCraftablePetIdsByNameTier(indexTarget, "Golden")
+            if #indexIds >= batch then
+                target = indexTarget
+                log("DEBUG", ("Rainbow: Index reward target=%s (have %d Golden copies)"):format(target, #indexIds))
+            else
+                log("DEBUG", ("Rainbow: Index reward target=%s but only have %d/%d Golden copies, skipping"):format(indexTarget, #indexIds, batch))
+            end
+        else
+            log("DEBUG", "Rainbow: No index reward targets")
+        end
+        
+        -- Fallback: any missing Rainbow pet (only if we have materials!)
+        if (not target or target == "") then
+            local anyMissing = Kaitun.GetNextMissingIndexPetForTier("Rainbow")
+            if anyMissing and anyMissing ~= "" then
+                local missingIds = Kaitun.GetCraftablePetIdsByNameTier(anyMissing, "Golden")
+                if #missingIds >= batch then
+                    target = anyMissing
+                    log("DEBUG", ("Rainbow: Missing index pet=%s (have %d Golden copies)"):format(target, #missingIds))
+                else
+                    log("DEBUG", ("Rainbow: Missing index pet=%s but only have %d/%d Golden copies, skipping"):format(anyMissing, #missingIds, batch))
+                end
+            else
+                log("DEBUG", "Rainbow: No missing Rainbow pets")
+            end
+        end
+        
+        -- If in "auto" mode and no index targets (or no materials), try best for team
+        if mode == "auto" and (not target or target == "") then
+            target = Kaitun.GetBestRainbowCraftTarget(batch)
+            if target and target ~= "" then
+                log("DEBUG", ("Rainbow: Best for team=%s"):format(target))
+            else
+                log("DEBUG", ("Rainbow: GetBestRainbowCraftTarget returned nil (need %d Golden copies)"):format(batch))
+            end
+        end
+    end
+    
+    if not target or target == "" then
+        log("DEBUG", "Rainbow: No target pet determined, stopping")
+        return false
+    end
+
+    local ids = Kaitun.GetCraftablePetIdsByNameTier(target, "Golden") -- Rainbow machine converts Golden -> Rainbow
+    log("DEBUG", ("Rainbow: Target=%s, found %d Golden copies (need %d)"):format(target, #ids, batch))
+    
+    -- Hard check: MUST have exactly the batch amount (don't queue partial)
+    local minRequired = requireFull and desiredBatch or batch
+    
+    if #ids < minRequired then
+        setLoopStatus("Craft", "Rainbow", ("%s need %d/%d (won't queue partial)"):format(target, #ids, minRequired))
+        log("DEBUG", ("Rainbow: Only %d Golden copies, need %d for full batch"):format(#ids, minRequired))
+        return false
+    end
+
+    -- Always use the desired batch size (e.g., 5) for a single craft
+    local actualBatch = desiredBatch
+    local send = {}
+    for i = 1, actualBatch do send[i] = ids[i] end
+    
+    -- Rainbow crafting requires proximity to Rainbow machine (same as Golden)
+    -- Try to find and teleport to machine before crafting
+    local rainbowWait = 3  -- Wait time after teleport
+    local lockSeconds = rainbowWait + 2
+    
+    Kaitun.WithTeleportLock(lockSeconds, "Crafting:Rainbow", function()
+        local machinePos = Kaitun.GetMachinePosition("Rainbow")
+        if machinePos then
+            log("INFO", ("Rainbow: Teleporting to machine at %s"):format(tostring(machinePos)))
+            Kaitun.TeleportToMachine("Rainbow")
+            task.wait(rainbowWait)
+        else
+            log("WARN", "Rainbow: Machine not found! Will search zones...")
+            task.wait(0.2)
+        end
+    end)
+    
+    local ok, msg = Kaitun.StartRainbow(send)
+    if ok then
+        log("INFO", ("Started Rainbow craft: %s x%d"):format(target, actualBatch))
+        return true
+    end
+    log("WARN", ("StartRainbow failed: %s"):format(tostring(msg)))
+    return false
+end
+
+function Kaitun.GetQuestEggTargets()
+    -- returns set { [eggName]=true } for active, uncompleted egg-open quests
+    local data = Kaitun.GetData()
+    if not data or not data.Quests then return {} end
+    local targets = {}
+    for questId, st in pairs(data.Quests) do
+        if st and not st.Claimed and not st.Completed then
+            local def = QuestData[questId]
+            if def and def.Description then
+                local desc = tostring(def.Description)
+                local egg = desc:match("Open an? ([^!]+) egg") or desc:match("Open ([^!]+) eggs")
+                if egg and egg ~= "" then
+                    targets[egg] = true
+                end
+            end
+        end
+    end
+    return targets
+end
+
+function Kaitun.GetActiveQuests()
+    -- Returns array of {id, state, def, descLower}
+    local data = Kaitun.GetData()
+    if not data or not data.Quests then return {} end
+    local out = {}
+    for questId, st in pairs(data.Quests) do
+        if st and not st.Claimed and not st.Completed then
+            local def = QuestData[questId]
+            local desc = def and def.Description or ""
+            out[#out + 1] = {
+                id = questId,
+                state = st,
+                def = def,
+                desc = tostring(desc),
+                descLower = tostring(desc):lower(),
+            }
+        end
+    end
+    table.sort(out, function(a, b) return tostring(a.id) < tostring(b.id) end)
+    return out
+end
+
+function Kaitun.GetQuestType(q)
+    -- q is an entry from GetActiveQuests()
+    if not q or not q.descLower then return "Unknown" end
+    local d = q.descLower
+    if d:find("open", 1, true) and d:find("egg", 1, true) then
+        return "OpenEgg"
+    end
+    if d:find("unlock", 1, true) and d:find("island", 1, true) then
+        return "UnlockIsland"
+    end
+    if d:find("click", 1, true) then
+        return "Click"
+    end
+    if d:find("rebirth", 1, true) then
+        return "Rebirth"
+    end
+    if d:find("gold", 1, true) then
+        return "Golden"
+    end
+    if d:find("treat", 1, true) then
+        return "Treat"
+    end
+    return "Other"
+end
+
+----------------------------------------------------------------
+-- QUESTS
+----------------------------------------------------------------
+
+function Kaitun.ClaimQuest(questId)
+    setLoopStatus("Quest", "Claiming", tostring(questId))
+    local ok = Network:InvokeServer("ClaimQuest", questId)
+    if ok then
+        if Config.Quests and Config.Quests.AutoClaim and Config.Quests.AutoClaim.LogClaims then
+            local def = QuestData[questId]
+            local desc = def and def.Description or questId
+            log("INFO", ("Claimed quest: %s"):format(tostring(desc)))
+        end
+        return true
+    end
+    return false
+end
+
+function Kaitun.TryClaimQuests()
+    local cfg = Config.Quests and Config.Quests.AutoClaim
+    if not cfg or not cfg.Enabled then
+        setLoopStatus("Quest", "Idle", "")
+        return false
+    end
+
+    local data = Kaitun.GetData()
+    if not data or not data.Quests then
+        setLoopStatus("Quest", "Waiting", "no quest data")
+        return false
+    end
+
+    local claimedAny = false
+    for questId, st in pairs(data.Quests) do
+        if st and st.Completed and not st.Claimed then
+            claimedAny = Kaitun.ClaimQuest(questId) or claimedAny
+            task.wait(0.15)
+        end
+    end
+
+    if not claimedAny then
+        setLoopStatus("Quest", "Idle", "nothing to claim")
+    end
+    return claimedAny
+end
+
+function Kaitun.GetEggIndexScore(eggName, tier, strategy)
+    local egg = EggData[eggName]
+    if not egg or not egg.Pets then return 0, 0 end
+    local score = 0
+    local missing = 0
+    for petName, chance in pairs(egg.Pets) do
+        if not Kaitun.IsPetDiscovered(petName, tier) then
+            missing += 1
+            local c = tonumber(chance) or 1
+            if strategy == "hard" then
+                score += (1 / math.max(c, 0.0001))
+            else
+                score += c
+            end
+        end
+    end
+    return score, missing
+end
+
+function Kaitun.GetIndexMissingCount(tiers)
+    -- tiers: array of tier strings; defaults to {"Normal"}
+    tiers = tiers or {"Normal"}
+    local missing = 0
+    for eggName, egg in pairs(EggData) do
+        if type(egg) == "table" and egg.Pets then
+            for petName in pairs(egg.Pets) do
+                for _, tier in ipairs(tiers) do
+                    if not Kaitun.IsPetDiscovered(petName, tier) then
+                        missing += 1
+                        break
+                    end
+                end
+            end
+        end
+    end
+    return missing
+end
+
+function Kaitun.GetBestEggForIndex()
+    local cfg = Config.IndexSettings or {}
+    local unlocked = Kaitun.GetUnlockedEggs()
+    local amt = Kaitun.ResolveHatchAmount(Config.EggHatching and Config.EggHatching.Amount)
+
+    local strategy = tostring(cfg.Strategy or "easy"):lower()
+    if strategy ~= "hard" then strategy = "easy" end
+
+    -- Always use Normal tier for Collection goal
+    local tiers = {"Normal"}
+
+    local function eggAllowed(eggName)
+        local egg = EggData and EggData[eggName]
+        if type(egg) ~= "table" then return false end
+        
+        -- Filter: only normal hatchable eggs (not exclusive/robux/event)
+        if not egg.Index or not egg.Pets then return false end
+        if egg.Exclusive or egg.RobuxEgg then return false end
+        local idx = tonumber(egg.Index)
+        if not idx or (idx >= 900 and idx < 1000) then return false end  -- skip event range
+        
+        -- Must be affordable
+        local price = tonumber(egg.Price)
+        if not price or price <= 0 then return false end
+        local ok = Kaitun.CanAffordEgg(eggName, amt)
+        if not ok then return false end
+        
+        -- If OnlyUnlockedEggs is true, check unlock status
+        if cfg.OnlyUnlockedEggs and unlocked[eggName] ~= true then
+            return false
+        end
+        return true
+    end
+    
+    -- Fallback version that ignores unlock status (for when in World 2 but can only afford World 1)
+    local function eggAllowedFallback(eggName)
+        local egg = EggData and EggData[eggName]
+        if type(egg) ~= "table" then return false end
+        
+        -- Same filter as eggAllowed
+        if not egg.Index or not egg.Pets then return false end
+        if egg.Exclusive or egg.RobuxEgg then return false end
+        local idx = tonumber(egg.Index)
+        if not idx or (idx >= 900 and idx < 1000) then return false end
+        
+        local price = tonumber(egg.Price)
+        if not price or price <= 0 then return false end
+        local ok = Kaitun.CanAffordEgg(eggName, amt)
+        if not ok then return false end
+        return true
+    end
+
+    -- Pick egg that best fills missing index entries (sum across selected tiers)
+    local bestEgg, bestWhy = nil, nil
+    local bestScore, bestMissing = -1, 0
+
+    for eggName, egg in pairs(EggData) do
+        if eggAllowed(eggName) then
+            local totalScore = 0
+            local totalMissing = 0
+            for _, tier in ipairs(tiers) do
+                local s, m = Kaitun.GetEggIndexScore(eggName, tier, strategy)
+                totalScore += s
+                totalMissing += m
+            end
+
+            if totalMissing > 0 then
+                if totalScore > bestScore then
+                    bestScore = totalScore
+                    bestMissing = totalMissing
+                    bestEgg = eggName
+                    bestWhy = ("%s (%d missing)"):format(strategy, totalMissing)
+                end
+            end
+        end
+    end
+    
+    -- 3) Fallback: if no unlocked eggs have missing entries, try ALL affordable eggs
+    if not bestEgg and cfg.OnlyUnlockedEggs then
+        for eggName, egg in pairs(EggData) do
+            if eggAllowedFallback(eggName) then
+                local totalScore = 0
+                local totalMissing = 0
+                for _, tier in ipairs(tiers) do
+                    local s, m = Kaitun.GetEggIndexScore(eggName, tier, strategy)
+                    totalScore += s
+                    totalMissing += m
+                end
+
+                if totalMissing > 0 then
+                    if totalScore > bestScore then
+                        bestScore = totalScore
+                        bestMissing = totalMissing
+                        bestEgg = eggName
+                        bestWhy = ("%s (%d missing, fallback)"):format(strategy, totalMissing)
+                    end
+                end
+            end
+        end
+    end
+
+    return bestEgg, bestWhy
+end
+
+function Kaitun.GetNextUnlockableZone()
+    local clicks = Kaitun.GetClicks()
+    for _, zone in ipairs(_zoneOrder) do
+        if not Kaitun.IsZoneUnlocked(zone.name) then
+            if clicks >= zone.price then
+                return zone.name, zone.price
+            else
+                return nil, zone.price -- Can't afford yet
+            end
+        end
+    end
+    return nil, nil -- All zones unlocked
+end
+
+function Kaitun.GetPets()
+    local data = Kaitun.GetData()
+    return data and data.Pets or {}
+end
+
+function Kaitun.GetPetCount()
+    local count = 0
+    for _ in pairs(Kaitun.GetPets()) do
+        count = count + 1
+    end
+    return count
+end
+
+function Kaitun.GetUnlockedEggs()
+    local data = Kaitun.GetData()
+    return data and data.UnlockedEggs or {}
+end
+
+function Kaitun.GetOwnedGamepasses()
+    local data = Kaitun.GetData()
+    return data and data.Gamepasses or {}
+end
+
+-- Hatch entitlements
+-- NOTE: Per your latest note, triple hatch is free (treat as always available).
+function Kaitun.HasTripleHatch()
+    return true
+end
+
+function Kaitun.HasEightHatch()
+    local gp = Kaitun.GetOwnedGamepasses()
+    return gp and gp.x8Egg == true
+end
+
+function Kaitun.ResolveHatchAmount(requested)
+    -- If user explicitly sets 1/3/8 (number or string), do NOT clamp.
+    -- The server will decide; we also "learn" the real cap from successful hatch results.
+    local r = requested
+    if type(r) == "string" then
+        if r:lower() == "auto" then
+            r = nil
+        else
+            r = tonumber(r)
+        end
+    end
+    r = tonumber(r)
+
+    if r == 1 or r == 3 or r == 8 then
+        return r
+    end
+
+    -- Auto: prefer learned cap, otherwise fall back to replicated gamepass flags.
+    if _cache.hatchCap == 1 or _cache.hatchCap == 3 or _cache.hatchCap == 8 then
+        return _cache.hatchCap
+    end
+
+    if Kaitun.HasEightHatch() then return 8 end
+    if Kaitun.HasTripleHatch() then return 3 end
+    return 1
+end
+
+function Kaitun.GetEggPrice(eggName)
+    local egg = EggData[eggName]
+    if type(egg) ~= "table" then
+        return math.huge
+    end
+    return tonumber(egg.Price) or math.huge
+end
+
+function Kaitun.GetEggCurrency(eggName)
+    local egg = EggData[eggName]
+    if type(egg) ~= "table" then
+        return "Clicks"
+    end
+    return tostring(egg.Currency or "Clicks")
+end
+
+function Kaitun.GetEggCost(eggName, amount)
+    local price = Kaitun.GetEggPrice(eggName)
+    local amt = tonumber(amount) or 1
+    if amt < 1 then amt = 1 end
+    return price * amt
+end
+
+function Kaitun.CanAffordEgg(eggName, amount)
+    local currency = Kaitun.GetEggCurrency(eggName)
+    local cost = Kaitun.GetEggCost(eggName, amount)
+    local have = Kaitun.GetStat(currency)
+    return have >= cost, cost, have, currency
+end
+
+function Kaitun.GetProgressReserveClicks()
+    -- Reserve system disabled (was causing more issues than it solved)
+    return 0
+end
+
+-- Collection achievement helper (the "pet index quest" in this game)
+function Kaitun.GetCollectionProgress()
+    -- Returns current, required, tierIndex for the Collection achievement
+    -- Returns nil, nil, nil if Collection data isn't populated yet
+    local data = Kaitun.GetData()
+    local discovered = tonumber(data and data.DiscoveredCount) or 0
+    local ach = data and data.Achievements
+    local col = ach and ach.Collection
+    
+    -- Only use Collection if it's actually populated by the game
+    if not col or type(col) ~= "table" then
+        return nil, nil, nil  -- Collection data not available yet
+    end
+    
+    local tierIdx = tonumber(col.Index) or 1
+    local tasks = AchievementsData and AchievementsData.Collection and AchievementsData.Collection.Tasks
+    local task = tasks and tasks[tierIdx]
+    local required = task and tonumber(task.Amount) or 0
+    
+    return discovered, required, tierIdx
+end
+
+function Kaitun.ShouldPursueCollectionGoal()
+    -- Returns true if we should pursue index to reach the Collection target tier
+    local director = Config.Director
+    if not (director and director.Enabled and director.Goals) then return false end
+    
+    local targetTier = tonumber(director.Goals.CollectionTargetTier) or 0
+    if targetTier <= 0 then return false end
+    
+    local current, required, currentTier = Kaitun.GetCollectionProgress()
+    
+    -- If Collection data isn't populated yet, don't pursue (wait for game to sync)
+    if not current or not required or not currentTier then
+        return false
+    end
+    
+    -- If we've already reached or passed the target tier, stop pursuing index for Collection
+    if currentTier >= targetTier then
+        if current >= required then
+            return false
+        end
+    end
+    
+    -- Otherwise, if our DiscoveredCount is below the target tier's requirement, pursue index
+    local tasks = AchievementsData and AchievementsData.Collection and AchievementsData.Collection.Tasks
+    local targetTask = tasks and tasks[targetTier]
+    local targetAmount = targetTask and tonumber(targetTask.Amount) or 0
+    
+    return current < targetAmount
+end
+
+function Kaitun.ResolveHatchTarget(amount)
+    -- Returns eggName, why. Director-driven selection to avoid manual toggles.
+    local amt = Kaitun.ResolveHatchAmount(amount or (Config.EggHatching and Config.EggHatching.Amount))
+    local director = Config.Director
+    local dcfg = director and director.Hatching or nil
+
+    -- 0) Explicit override (forces this egg always)
+    if Config.EggHatching and Config.EggHatching.TargetEgg and Config.EggHatching.TargetEgg ~= "" then
+        return Config.EggHatching.TargetEgg, "configured"
+    end
+    
+    -- Warmup: if DiscoveredCount < 5, force Basic eggs SINGLE HATCH only (prevents Collection goal bugs on fresh accounts)
+    local data = Kaitun.GetData()
+    local discoveredCount = (data and data.DiscoveredCount) or 0
+    if discoveredCount < 5 then
+        local basicEgg = EggData.Basic
+        if basicEgg and Kaitun.CanAffordEgg("Basic", 1) then  -- Single hatch only (amount=1)
+            return "Basic", "warmup_single"  -- Special flag to force amount=1
+        end
+    end
+
+    -- Priority Egg: Try this first when affordable (falls back if no success within 10s)
+    local priorityEgg = Config.EggHatching and Config.EggHatching.PriorityEgg
+    if priorityEgg and priorityEgg ~= "" then
+        local failCache = _cache.priorityEggFailed
+        local now = os.clock()
+        
+        -- Check if we're in cooldown (after failing for 10s straight)
+        if now < (failCache.cooldownUntil or 0) then
+            -- In cooldown, skip priority egg
+        else
+            local canAfford = Kaitun.CanAffordEgg(priorityEgg, amt)
+            if canAfford then
+                return priorityEgg, "priority"
+            end
+        end
+    end
+
+    local reserveClicks = Kaitun.GetProgressReserveClicks()
+
+    local function canAffordWithReserve(eggName)
+        local ok, cost, have, currency = Kaitun.CanAffordEgg(eggName, amt)
+        if not ok then return false end
+        if currency == "Clicks" and reserveClicks > 0 then
+            return (have - cost) >= reserveClicks
+        end
+        return true
+    end
+
+    -- 1) Quest eggs (OpenEgg quests)
+    if director and director.Enabled and dcfg and dcfg.PreferQuestEggs then
+        local qt = director.QuestTypes or {}
+        if qt.OpenEgg ~= false then
+            local targets = Kaitun.GetQuestEggTargets()
+            for eggName in pairs(targets) do
+                if canAffordWithReserve(eggName) then
+                    return eggName, "quest"
+                end
+            end
+        end
+    end
+
+    -- 2) Collection Goal (the real "pet index quest": pursue index until we hit the target tier)
+    local shouldPursueCollection = director and director.Enabled and Kaitun.ShouldPursueCollectionGoal()
+    if shouldPursueCollection then
+        local eggName, why = Kaitun.GetBestEggForIndex()
+        if eggName then
+            local canAfford = Kaitun.CanAffordEgg(eggName, amt)
+            if canAfford then
+                local current, required, tier = Kaitun.GetCollectionProgress()
+                local targetTier = tonumber(director.Goals.CollectionTargetTier) or 0
+                return eggName, ("collection:T%d (%d/%d) %s"):format(targetTier, current, required, tostring(why or ""))
+            end
+        else
+            -- No index egg found at all — this shouldn't happen if you have missing pets
+            log("WARN", ("Index: GetBestEggForIndex returned nil (no valid index eggs found?)"))
+        end
+    -- (Collection goal not active - this is normal if target tier is already completed)
+    end
+
+    -- 3) Best affordable egg (progression)
+    local best = Kaitun.GetBestAffordableEgg(amt)
+    if best then
+        if canAffordWithReserve(best) then
+            return best, "best"
+        else
+            -- Reserve blocking (shouldn't happen since reserve=0)
+            log("WARN", ("Best egg %s blocked by reserve?"):format(best))
+            return best, "best(no-reserve)"
+        end
+    end
+
+    return nil, "none"
+end
+
+function Kaitun.GetQuestSummary(maxLines)
+    maxLines = tonumber(maxLines) or 6
+    local qs = Kaitun.GetActiveQuests()
+    if #qs == 0 then return "none" end
+    local parts = {}
+    for i = 1, math.min(#qs, maxLines) do
+        local q = qs[i]
+        local qt = Kaitun.GetQuestType(q)
+        parts[#parts + 1] = ("%s(%s)"):format(tostring(q.id), qt)
+    end
+    if #qs > maxLines then
+        parts[#parts + 1] = ("+%d more"):format(#qs - maxLines)
+    end
+    return table.concat(parts, ", ")
+end
+
+function Kaitun.GetBestAffordableEgg(amount)
+    local amt = Kaitun.ResolveHatchAmount(amount or (Config.EggHatching and Config.EggHatching.Amount))
+    local unlocked = Kaitun.GetUnlockedEggs()
+    local bestEgg = nil
+    local bestIndex = -1
+    local bestPrice = -1  -- Tiebreaker: when Index is tied, pick highest price
+    
+    -- First try unlocked eggs
+    for eggName, isUnlocked in pairs(unlocked) do
+        if isUnlocked == true then
+            local egg = EggData[eggName]
+            if type(egg) == "table" then
+                local price = tonumber(egg.Price)
+                local currency = tostring(egg.Currency or "Clicks")
+                local have = Kaitun.GetStat(currency)
+                local cost = (price or math.huge) * amt
+                if price and price > 0 and have >= cost then
+                    local idx = tonumber(egg.Index) or 0
+                    -- Pick highest Index; if tied, pick highest Price
+                    if idx > bestIndex or (idx == bestIndex and price > bestPrice) then
+                        bestIndex = idx
+                        bestPrice = price
+                        bestEgg = eggName
+                    end
+                end
+            end
+        end
+    end
+    
+    -- Fallback: check ALL eggs in EggData if none unlocked are affordable
+    -- (handles World 2 where you can only afford World 1 eggs)
+    if not bestEgg then
+        for eggName, egg in pairs(EggData) do
+            if type(egg) == "table" then
+                local price = tonumber(egg.Price)
+                local currency = tostring(egg.Currency or "Clicks")
+                local have = Kaitun.GetStat(currency)
+                local cost = (price or math.huge) * amt
+                if price and price > 0 and have >= cost then
+                    local idx = tonumber(egg.Index) or 0
+                    -- Pick highest Index; if tied, pick highest Price
+                    if idx > bestIndex or (idx == bestIndex and price > bestPrice) then
+                        bestIndex = idx
+                        bestPrice = price
+                        bestEgg = eggName
+                    end
+                end
+            end
+        end
+    end
+    
+    return bestEgg
+end
+
+----------------------------------------------------------------
+-- CORE ACTIONS
+----------------------------------------------------------------
+
+function Kaitun.Tap()
+    Network:FireServer("Tap", true, false, false)
+end
+
+function Kaitun.HatchEgg(eggName, amount)
+    local requested = amount or (Config.EggHatching and Config.EggHatching.Amount)
+    amount = Kaitun.ResolveHatchAmount(requested)
+    setLoopStatus("Hatch", "Hatching", eggName)
+    -- Use game's built-in auto-delete list (configured via the egg UI).
+    -- Game code does: OpenEgg(eggName, amount, Data.AutoDeleting[eggName] or {})
+    pcall(function()
+        Kaitun.SyncServerAutoDeleteForEgg(eggName)
+    end)
+    local data = Kaitun.GetData()
+    local autoDeleteList = (data and data.AutoDeleting and data.AutoDeleting[eggName]) or {}
+    local result = Network:InvokeServer("OpenEgg", eggName, amount, autoDeleteList)
+    
+    if typeof(result) == "table" then
+        -- Learn hatch cap: if we asked for 8/3 but got fewer results, server likely capped it.
+        local got = #result
+        if (amount == 8 or amount == 3) and got > 0 and got < amount then
+            if got == 1 or got == 3 or got == 8 then
+                _cache.hatchCap = got
+            else
+                _cache.hatchCap = 1
+            end
+        elseif (requested == "auto" or requested == nil) and (got == 1 or got == 3 or got == 8) then
+            _cache.hatchCap = got
+        end
+
+        local pets = {}
+        for _, pet in pairs(result) do
+            local petName = typeof(pet) == "table" and pet[1] or tostring(pet)
+            local tier = typeof(pet) == "table" and pet[2] or "Normal"
+            local mutation = typeof(pet) == "table" and pet[3] or nil
+            
+            table.insert(pets, petName .. (tier ~= "Normal" and " ("..tier..")" or ""))
+            
+            -- Check if this is a rare hatch (Secret or Mythical)
+            local rarity = PetStats:GetRarity(petName)
+            local rarityStr = rarity and tostring(rarity) or "nil"
+            
+            -- Check if pet is Electric (check workspace egg model for Electric attribute)
+            local isElectric = false
+            pcall(function()
+                local eggModel = workspace.Eggs and workspace.Eggs:FindFirstChild(eggName)
+                if eggModel and eggModel:GetAttribute("Electric") then
+                    local expiry = eggModel:GetAttribute("ElectricExpiry")
+                    if expiry and os.time() < expiry then
+                        isElectric = true
+                    end
+                end
+            end)
+            
+            -- Send webhooks for rare pets
+            if rarityStr:find("Secret") then
+                Kaitun.SendWebhook(petName, tier, rarity, mutation, isElectric, "Secret")
+            elseif rarityStr == "Mythical" or rarityStr:find("Mythical") then
+                Kaitun.SendWebhook(petName, tier, rarity, mutation, isElectric, "Mythical")
+            end
+        end
+        return true, pets
+    elseif result == "broke" then
+        return false, "Not enough currency"
+    else
+        return false, tostring(result)
+    end
+end
+
+function Kaitun.DeletePet(petId)
+    local result = Network:InvokeServer("DeletePet", petId)
+    return result == true
+end
+
+function Kaitun.EquipBest()
+    return Network:InvokeServer("EquipBest")
+end
+
+function Kaitun.GetRebirths()
+    local data = Kaitun.GetData()
+    return data and data.Statistics and data.Statistics.Rebirths or 0
+end
+
+function Kaitun.GetRebirthOptions()
+    local data = Kaitun.GetData()
+    return data and data.RebirthOptions or 1
+end
+
+-- Max iterations for rebirth cost calc to prevent freezing on huge rebirth options
+local MAX_REBIRTH_COST_ITERS = 5000
+
+function Kaitun.GetRebirthCost(amount)
+    -- Cost for 'amount' rebirths at current rebirth count
+    -- GUARD: If amount is huge, use first+last sample to approximate (prevents freeze)
+    local currentRebirths = Kaitun.GetRebirths()
+    
+    if amount > MAX_REBIRTH_COST_ITERS then
+        -- Approximate: sample first and last cost, assume linear-ish growth
+        local firstCost = RebirthData:ClicksPrice(RebirthData.Modifier, currentRebirths)
+        local lastCost = RebirthData:ClicksPrice(RebirthData.Modifier, currentRebirths + amount - 1)
+        -- Sum of arithmetic-ish series: (first + last) * n / 2
+        return (firstCost + lastCost) * amount / 2
+    end
+    
+    local total = 0
+    for i = 0, amount - 1 do
+        total = total + RebirthData:ClicksPrice(RebirthData.Modifier, currentRebirths + i)
+    end
+    return total
+end
+
+function Kaitun.CanAffordRebirth(option)
+    local amount = getRebirthAmount(option)
+    local cost = Kaitun.GetRebirthCost(amount)
+    return Kaitun.GetClicks() >= cost, cost
+end
+
+function Kaitun.GetBestRebirthOption()
+    -- Returns the highest option we can afford (up to unlocked options)
+    local maxOption = Kaitun.GetRebirthOptions()
+    for opt = maxOption, 1, -1 do
+        if Kaitun.CanAffordRebirth(opt) then
+            return opt
+        end
+    end
+    return nil
+end
+
+function Kaitun.DoRebirth(option)
+    option = option or 1
+    local amount = getRebirthAmount(option)
+    local result = Network:InvokeServer("Rebirth", option)
+    if result then
+        if _rebirthSmart then
+            _rebirthSmart.lastRebirthTs = os.clock()  -- Track when we rebirthed to prevent spam
+            -- Reset high-click mode tracking for next cycle
+            _rebirthSmart.lastBestOption = 0
+            _rebirthSmart.lastOptionChangeTs = 0
+        end
+        -- Clear click rate tracker after rebirth (clicks reset, so old rate data is invalid)
+        if _cache and _cache.clickRate then
+            _cache.clickRate.samples = {}
+            _cache.clickRate.rate = 0
+        end
+        log("INFO", ("Rebirthed x%s (option %d)"):format(formatNumber(amount), option))
+        return true, amount
+    end
+    return false, 0
+end
+
+-- Update click rate estimate using a short rolling window (responsive to instant spikes)
+local function updateClickRate()
+    local now = os.clock()
+    local clicks = Kaitun.GetClicks()
+    local c = _cache.clickRate
+    local window = c.windowSeconds or 5
+
+    -- Add current sample
+    table.insert(c.samples, {ts = now, clicks = clicks})
+
+    -- Remove samples older than window
+    local cutoff = now - window
+    while #c.samples > 0 and c.samples[1].ts < cutoff do
+        table.remove(c.samples, 1)
+    end
+
+    -- Calculate rate from oldest to newest sample in window
+    if #c.samples >= 2 then
+        local oldest = c.samples[1]
+        local newest = c.samples[#c.samples]
+        local dt = newest.ts - oldest.ts
+        local dc = newest.clicks - oldest.clicks
+        if dt > 0 and dc > 0 then
+            c.rate = dc / dt
+            c.lastGoodRate = c.rate  -- Remember last valid rate
+            c.lastGoodRateTs = now
+        elseif dt == 0 then
+            -- Instant spike (same timestamp) — use a very high rate estimate
+            c.rate = math.max(c.rate, dc * 10)
+        elseif dt > 0 and dc == 0 and oldest.clicks > 1e20 then
+            -- PRECISION FIX: At very large click counts (Oc+), floating-point subtraction
+            -- can yield dc=0 even when clicks are increasing. Use last known good rate
+            -- if we have one from the last 30 seconds.
+            if c.lastGoodRate and c.lastGoodRate > 0 and c.lastGoodRateTs and (now - c.lastGoodRateTs) < 30 then
+                c.rate = c.lastGoodRate
+            end
+        end
+    end
+
+    return c.rate
+end
+
+function Kaitun.GetClickRate()
+    return _cache.clickRate.rate or 0
+end
+
+-- Smart rebirth state
+local _rebirthSmart = {
+    lastRebirthTs = 0,  -- timestamp of last rebirth (to build up rate data)
+    -- High-click mode tracking (option-based, no subtraction)
+    lastBestOption = 0,      -- last rebirth option we could afford
+    lastOptionChangeTs = 0,  -- when we last upgraded to a better option
+}
+
+-- High-click rebirth mode: uses option tracking instead of click rate
+-- At 50Sp+ clicks, floating-point subtraction breaks (precision loss).
+-- This mode only uses comparisons (>=) which still work fine.
+local HIGH_CLICK_THRESHOLD = 1e21  -- ~Sx, safely before precision breaks
+
+function Kaitun.TryRebirthHighClickMode()
+    local cfg = Config.Rebirth
+    local now = os.clock()
+
+    -- Wait 1.5s after rebirth before checking again
+    local postRebirthWait = 1.5
+    if _rebirthSmart.lastRebirthTs > 0 and (now - _rebirthSmart.lastRebirthTs) < postRebirthWait then
+        return false
+    end
+
+    local currentBest = Kaitun.GetBestRebirthOption()
+    if not currentBest then
+        return false  -- Can't afford any rebirth
+    end
+
+    local maxOption = Kaitun.GetRebirthOptions()
+    local waitThreshold = tonumber(cfg.SmartWaitImminent) or 5
+
+    -- At max option → rebirth immediately
+    if currentBest >= maxOption then
+        log("INFO", ("HighClick RB: At max opt%d → rebirth"):format(currentBest))
+        return Kaitun.DoRebirth(currentBest)
+    end
+
+    -- Initialize tracking if needed
+    if _rebirthSmart.lastOptionChangeTs == 0 then
+        _rebirthSmart.lastBestOption = currentBest
+        _rebirthSmart.lastOptionChangeTs = now
+        return false
+    end
+
+    -- Did we upgrade to a better option?
+    if currentBest > _rebirthSmart.lastBestOption then
+        _rebirthSmart.lastBestOption = currentBest
+        _rebirthSmart.lastOptionChangeTs = now
+        log("DEBUG", ("HighClick RB: Upgraded to opt%d, waiting..."):format(currentBest))
+        return false  -- Wait to see if we can get higher
+    end
+
+    -- How long have we been stuck at this option?
+    local stuckTime = now - _rebirthSmart.lastOptionChangeTs
+
+    if stuckTime >= waitThreshold then
+        local curAmt = getRebirthAmount(currentBest)
+        log("INFO", ("HighClick RB: Opt%d (%s) stuck for %.1fs → rebirth"):format(currentBest, formatNumber(curAmt), stuckTime))
+        -- DoRebirth will reset tracking on success
+        return Kaitun.DoRebirth(currentBest)
+    end
+
+    return false
+end
+
+function Kaitun.TryRebirth()
+    local cfg = Config.Rebirth
+    if not cfg.Enabled then return false end
+
+    local clicks = Kaitun.GetClicks()
+
+    -- HIGH-CLICK MODE: At 50Sp+ clicks, floating-point subtraction breaks.
+    -- Use option-based tracking instead of rate-based calculations.
+    if clicks > HIGH_CLICK_THRESHOLD and cfg.Mode:lower() == "smart" then
+        return Kaitun.TryRebirthHighClickMode()
+    end
+
+    -- Update click rate tracking (only for normal mode)
+    updateClickRate()
+
+    -- Check minimum clicks requirement
+    local minClicks = parseNumber(cfg.MinClicks or 0)
+    if minClicks > 0 and clicks < minClicks then
+        return false
+    end
+
+    -- CRITICAL: Don't rebirth if we're close to affording Space world (need to accumulate current clicks)
+    -- This check is MANDATORY and bypasses all other rebirth logic
+
+    -- Check Space world (if enabled and not owned)
+    if Config.WorldUnlock and Config.WorldUnlock.AutoBuyWorld2 and not Kaitun.HasWorld("Space") then
+        local spacePrice = (WorldData.Space and WorldData.Space.Price) or math.huge
+        if clicks < spacePrice then
+            -- If we're within 80% of the price, STOP rebirthing entirely (accumulate clicks)
+            local progress = clicks / spacePrice
+            if progress >= 0.8 then
+                log("INFO", ("Pausing rebirth: %.0f%% to Space world (accumulating clicks)"):format(progress * 100))
+                return false
+            end
+
+            -- If we have rate data, use ETA-based pause
+            local rate = Kaitun.GetClickRate()
+            if rate > 0 then
+                local eta = (spacePrice - clicks) / rate
+                if eta <= 120 and eta > 0 then
+                    log("INFO", ("Pausing rebirth: Space world ETA=%.0fs"):format(eta))
+                    return false
+                end
+            end
+        end
+    end
+
+    -- Check next zone unlock (less critical, only if we have rate data)
+    local rate = Kaitun.GetClickRate()
+    if rate > 0 then
+        local zoneName, zonePrice = Kaitun.GetNextLockedZone()
+        if zoneName and zonePrice and clicks < zonePrice then
+            local eta = (zonePrice - clicks) / rate
+            if eta <= 120 and eta > 0 then
+                log("INFO", ("Pausing rebirth: %s unlock ETA=%.0fs"):format(zoneName, eta))
+                return false
+            end
+        end
+    end
+
+    local mode = cfg.Mode:lower()
+    
+    if mode == "smart" then
+        --[[
+            SIMPLE OPTIMAL SMART REBIRTH:
+            1. Find highest affordable option (currentBest)
+            2. If next option is ≤5s away → wait
+            3. Otherwise → rebirth immediately
+            
+            No complex state, no efficiency calcs, just optimal timing.
+        ]]
+        local now = os.clock()
+        
+        -- Wait 1.5s after rebirth to let click rate stabilize (clicks reset on rebirth)
+        local postRebirthWait = 1.5
+        if _rebirthSmart.lastRebirthTs > 0 and (now - _rebirthSmart.lastRebirthTs) < postRebirthWait then
+            return false
+        end
+        
+        local rate = Kaitun.GetClickRate()
+        local clicks = Kaitun.GetClicks()
+        local maxOption = Kaitun.GetRebirthOptions()
+        
+        -- Find highest affordable option
+        local currentBest = Kaitun.GetBestRebirthOption()
+        if not currentBest then
+            return false  -- Can't afford any rebirth
+        end
+        
+        -- Configurable wait threshold (default 5s)
+        local waitThreshold = tonumber(cfg.SmartWaitImminent) or 5
+        
+        -- If at max option, rebirth immediately
+        if currentBest >= maxOption then
+            log("INFO", ("Smart RB: At max opt%d → rebirth"):format(currentBest))
+            return Kaitun.DoRebirth(currentBest)
+        end
+        
+        -- Check if next option is within waitThreshold seconds
+        local nextOpt = currentBest + 1
+        local nextAmt = getRebirthAmount(nextOpt)
+        local nextCost = tonumber(Kaitun.GetRebirthCost(nextAmt))
+        
+        if not nextCost or nextCost <= 0 then
+            -- Can't determine next cost, just rebirth
+            return Kaitun.DoRebirth(currentBest)
+        end
+        
+        -- If we already have enough for next, rebirth with next
+        if clicks >= nextCost then
+            log("INFO", ("Smart RB: Can afford opt%d → rebirth"):format(nextOpt))
+            return Kaitun.DoRebirth(nextOpt)
+        end
+        
+        -- Calculate ETA to next option
+        if rate <= 0 then
+            -- No rate data yet - but don't wait forever (precision issues at Oc+ clicks)
+            -- If it's been more than 10s since rebirth and rate is still 0, just rebirth
+            local timeSinceRebirth = now - (_rebirthSmart.lastRebirthTs or 0)
+            if timeSinceRebirth > 10 then
+                log("WARN", ("Smart RB: Rate stuck at 0 for %.1fs (precision issue?), rebirthing with opt%d"):format(timeSinceRebirth, currentBest))
+                return Kaitun.DoRebirth(currentBest)
+            end
+            return false
+        end
+        
+        local clicksNeeded = nextCost - clicks
+        local etaToNext = clicksNeeded / rate
+        
+        if etaToNext <= waitThreshold then
+            -- Next option is close, wait for it
+            log("DEBUG", ("Smart RB: Opt%d ready, opt%d ETA=%.1fs ≤ %ds → waiting"):format(
+                currentBest, nextOpt, etaToNext, waitThreshold
+            ))
+            return false
+        else
+            -- Next option is too far, rebirth now
+            local curAmt = getRebirthAmount(currentBest)
+            log("INFO", ("Smart RB: Opt%d (%s) | opt%d ETA=%.1fs > %ds → rebirth now"):format(
+                currentBest, formatNumber(curAmt), nextOpt, etaToNext, waitThreshold
+            ))
+            return Kaitun.DoRebirth(currentBest)
+        end
+        
+    elseif mode == "best" then
+        -- Use highest affordable option
+        local bestOpt = Kaitun.GetBestRebirthOption()
+        if bestOpt then
+            return Kaitun.DoRebirth(bestOpt)
+        end
+        
+    elseif mode == "save" then
+        -- Save until we can afford target rebirths, then use best option
+        local target = parseNumber(cfg.SaveTarget)
+        local maxOption = Kaitun.GetRebirthOptions()
+        
+        -- Find best option that doesn't exceed target
+        local bestOpt = nil
+        for opt = maxOption, 1, -1 do
+            local amount = getRebirthAmount(opt)
+            if amount <= target and Kaitun.CanAffordRebirth(opt) then
+                bestOpt = opt
+                break
+            end
+        end
+        
+        if bestOpt then
+            return Kaitun.DoRebirth(bestOpt)
+        end
+        
+    elseif mode == "single" then
+        -- Always use option 1
+        if Kaitun.CanAffordRebirth(1) then
+            return Kaitun.DoRebirth(1)
+        end
+    end
+    
+    return false
+end
+
+----------------------------------------------------------------
+-- MINIGAMES
+----------------------------------------------------------------
+
+function Kaitun.GetMinigameCooldownRemaining()
+    -- DigGame cooldown: mirrors game's logic from PlayerScripts.Modules.Controllers.Minigame
+    -- Condition: (Time > 3600s ago) OR (Time == 0) OR (Counter < Max) → can play
+    local data = Kaitun.GetData()
+    if not data then return 0 end
+    local mc = data.MinigameCooldown
+    if not mc then return 0 end
+    
+    local time = tonumber(mc.Time) or 0
+    local max = tonumber(mc.Max) or 0
+    local counter = tonumber(mc.Counter) or 0
+    
+    -- If time is 0, no cooldown started yet
+    if time == 0 then return 0 end
+    
+    -- If counter < max, we're still allowed to play
+    if counter < max then return 0 end
+    
+    -- Otherwise check if 3600s (1 hour) has passed
+    local elapsed = os.time() - time
+    if elapsed >= 3600 then
+        return 0
+    end
+    
+    return math.max(0, 3600 - elapsed)
+end
+
+function Kaitun.CanPlayMinigame(gameName)
+    if gameName == "DigGame" then
+        local remaining = Kaitun.GetMinigameCooldownRemaining()
+        return remaining <= 0, remaining
+    end
+    return true, 0
+end
+
+function Kaitun.PlayMinigame(gameName)
+    local canPlay, remaining = Kaitun.CanPlayMinigame(gameName)
+    if not canPlay then
+        return false, ("cooldown %ds"):format(math.floor(remaining))
+    end
+
+    -- Two-step process: Start → Finish (mirrors game's Minigame controller)
+    local startResult = Network:InvokeServer("StartMinigame", gameName)
+    if not startResult then
+        return false, "StartMinigame failed"
+    end
+    
+    -- Wait a moment for server to process, then finish/claim
+    task.wait(0.5)
+    local finishResult = Network:InvokeServer("FinishMinigame", gameName)
+    
+    return finishResult ~= nil, finishResult
+end
+
+----------------------------------------------------------------
+-- POTION MACHINE
+----------------------------------------------------------------
+
+function Kaitun.GetPotionCooldownRemaining(amount)
+    -- amount: 1, 3, or 10
+    local data = Kaitun.GetData()
+    if not data or not data.PotionMachine then return 0 end
+    
+    local cooldownKey = "Cooldown" .. tostring(amount)
+    local cooldownEnd = tonumber(data.PotionMachine[cooldownKey]) or 0
+    
+    if cooldownEnd == 0 then return 0 end
+    
+    local now = os.time()
+    if now >= cooldownEnd then
+        return 0
+    end
+    
+    return cooldownEnd - now
+end
+
+function Kaitun.BuyPotion(amount)
+    amount = tonumber(amount) or 1
+    if amount ~= 1 and amount ~= 3 and amount ~= 10 then
+        amount = 1
+    end
+    
+    setLoopStatus("Potion", "Buying", ("x%d"):format(amount))
+    local result = Network:InvokeServer("BuyPotionMachine", amount)
+    
+    if typeof(result) == "table" then
+        return true, result
+    end
+    return false, result
+end
+
+function Kaitun.TryBuyPotion()
+    local cfg = Config.PotionMachine
+    if not cfg or not cfg.Enabled then return false end
+    
+    local gems = Kaitun.GetGems()
+    local minGems = tonumber(cfg.MinGems) or 0
+    
+    if gems < minGems then
+        setLoopStatus("Potion", "Waiting", ("need %d gems, have %d"):format(minGems, gems))
+        return false
+    end
+    
+    local amount = tonumber(cfg.BuyAmount) or 1
+    local remaining = Kaitun.GetPotionCooldownRemaining(amount)
+    
+    if remaining > 0 then
+        setLoopStatus("Potion", "Cooldown", ("%dx %ds"):format(amount, remaining))
+        return false
+    end
+    
+    local success, result = Kaitun.BuyPotion(amount)
+    
+    if success and cfg.LogPurchases then
+        local potions = {}
+        if typeof(result) == "table" then
+            for _, potionName in pairs(result) do
+                table.insert(potions, tostring(potionName))
+            end
+        end
+        log("INFO", ("Bought potions x%d: %s"):format(amount, table.concat(potions, ", ")))
+    elseif not success then
+        log("WARN", ("Buy potion x%d failed: %s"):format(amount, tostring(result)))
+    end
+    
+    return success
+end
+
+----------------------------------------------------------------
+-- RANK REWARDS
+----------------------------------------------------------------
+
+function Kaitun.CanClaimRankReward()
+    local data = Kaitun.GetData()
+    if not data or not data.Ranks then return false end
+    
+    local nextRewardTime = tonumber(data.Ranks.NextRewardTime) or math.huge
+    
+    -- If NextRewardTime is 0 or in the past, reward is claimable
+    if nextRewardTime == 0 then return true end
+    if os.time() >= nextRewardTime then return true end
+    
+    return false
+end
+
+function Kaitun.ClaimRankReward()
+    setLoopStatus("Rank", "Claiming", "")
+    local success, rewards = Network:InvokeServer("ClaimRankReward")
+    
+    if success then
+        if Config.RankRewards and Config.RankRewards.LogClaims then
+            local rewardText = ""
+            if typeof(rewards) == "table" and #rewards > 0 then
+                local items = {}
+                for _, reward in ipairs(rewards) do
+                    table.insert(items, tostring(reward))
+                end
+                rewardText = table.concat(items, ", ")
+            end
+            local currentRank = (Kaitun.GetData().Ranks and Kaitun.GetData().Ranks.CurrentRank) or "?"
+            log("INFO", ("Claimed Rank reward (%s): %s"):format(currentRank, rewardText))
+        end
+        return true
+    end
+    return false
+end
+
+function Kaitun.TryClaimRankReward()
+    local cfg = Config.RankRewards
+    if not cfg or not cfg.Enabled then return false end
+    
+    if Kaitun.CanClaimRankReward() then
+        return Kaitun.ClaimRankReward()
+    end
+    
+    setLoopStatus("Rank", "Waiting", "no reward available")
+    return false
+end
+
+----------------------------------------------------------------
+-- ELECTRIC WHEEL
+----------------------------------------------------------------
+
+function Kaitun.GetElectricSpinsAvailable()
+    local data = Kaitun.GetData()
+    if not data or not data.Items then return 0 end
+    return tonumber(data.Items.ElectricSpins) or 0
+end
+
+function Kaitun.SpinElectricWheel()
+    setLoopStatus("ElectricWheel", "Spinning", "")
+    local result = Network:InvokeServer("SpinWheel", "ElectricSpinWheel")
+
+    if result and typeof(result) == "table" then
+        local rewardIndex = result[1]
+        local remainingSpins = result[2]
+
+        -- Get reward details from Wheelspin module (hardcoded from decompile)
+        local rewards = {
+            {Type = "Currency", Name = "Gems", Amount = 5000000, Display = "5M+ Gems"},
+            {Type = "Currency", Name = "Gems", Amount = 70000000, Display = "70M+ Gems"},
+            {Type = "Currency", Name = "Gems", Amount = 140000000, Display = "140M+ Gems"},
+            {Type = "Currency", Name = "Tokens", Amount = 2, Display = "2 Tokens"},
+            {Type = "Boost", Name = "Space Rebirths I", Display = "Space Rebirths I"},
+            {Type = "Boost", Name = "Space Luck I", Display = "Space Luck I"},
+            {Type = "Boost", Name = "Space Tap I", Display = "Space Tap I"},
+            {Type = "Egg", Name = "Cyborg Egg", Display = "Cyborg Egg"},
+        }
+
+        local reward = rewards[rewardIndex]
+        if reward and Config.ElectricWheel and Config.ElectricWheel.LogSpins then
+            log("INFO", ("Electric Wheel spin → %s (%d spins left)"):format(reward.Display, remainingSpins))
+        end
+
+        return true, reward
+    end
+
+    return false, nil
+end
+
+function Kaitun.TrySpinElectricWheel()
+    local cfg = Config.ElectricWheel
+    if not cfg or not cfg.Enabled then return false end
+
+    local spins = Kaitun.GetElectricSpinsAvailable()
+    if spins <= 0 then
+        setLoopStatus("ElectricWheel", "Waiting", "no spins available")
+        return false
+    end
+
+    return Kaitun.SpinElectricWheel()
+end
+
+----------------------------------------------------------------
+-- GEMSHOP UPGRADES
+----------------------------------------------------------------
+
+local function gemshopNextCost(key, nextLevel)
+    local up = GemShopData[key]
+    if not up then return math.huge end
+    if up.Function then
+        local raw = (up.Function(nextLevel) * up.Price / 10)
+        return math.round(raw) * 10
+    end
+    return (up.Price or math.huge) * nextLevel
+end
+
+local function gemshopRequiredIsland(key, nextLevel)
+    local up = GemShopData[key]
+    if not up or not up.IslandRequirements then return nil end
+    local bestIsland, bestReq = nil, math.huge
+    for island, reqLevel in pairs(up.IslandRequirements) do
+        if nextLevel <= reqLevel and reqLevel < bestReq then
+            bestReq = reqLevel
+            bestIsland = island
+        end
+    end
+    return bestIsland
+end
+
+function Kaitun.TryGemShopUpgrade()
+    local cfg = Config.GemShopUpgrades
+    if not cfg or not cfg.Enabled then return false end
+
+    local data = Kaitun.GetData()
+    if not data or not data.GemShop then return false end
+
+    local gems = Kaitun.GetGems()
+    local minGems = cfg.MinGems or 0
+
+    local mode = tostring(cfg.Mode or "balanced"):lower()
+    local targets = cfg.Targets or {}
+    local caps = cfg.Caps or {}
+    local after = tostring(cfg.AfterTargets or "cheapest"):lower()
+
+    local candidates = {}
+
+    local function addCandidate(key)
+        local current = tonumber(data.GemShop[key]) or 0
+        local up = GemShopData[key]
+        if not up then return end
+
+        local cap = tonumber(caps[key] or 0) or 0
+        if cap > 0 and current >= cap then
+            return
+        end
+
+        if current >= (up.Total or current) then
+            return
+        end
+
+        local nextLevel = current + 1
+        local reqIsland = gemshopRequiredIsland(key, nextLevel)
+        local hasReq = (not reqIsland) or reqIsland == "Spawn" or (data.Portals and data.Portals[reqIsland] == true)
+        if not hasReq then
+            return
+        end
+
+        local cost = gemshopNextCost(key, nextLevel)
+        if gems < cost + minGems then
+            return
+        end
+
+        table.insert(candidates, {
+            key = key,
+            current = current,
+            nextLevel = nextLevel,
+            cost = cost,
+            target = tonumber(targets[key] or 0) or 0,
+        })
+    end
+
+    for _, key in ipairs(cfg.Priority or {}) do
+        addCandidate(key)
+    end
+
+    if #candidates == 0 then
+        return false
+    end
+
+    -- Balanced mode: satisfy Targets first (in Priority order), then pick cheapest/priority.
+    if mode == "balanced" then
+        for _, key in ipairs(cfg.Priority or {}) do
+            local target = tonumber(targets[key] or 0) or 0
+            if target > 0 and (tonumber(data.GemShop[key]) or 0) < target then
+                for _, c in ipairs(candidates) do
+                    if c.key == key then
+                        setLoopStatus("Manage", "GemShop target", ("%s -> %d (cost %d)"):format(c.key, c.nextLevel, c.cost))
+                        local ok = Network:InvokeServer("UpgradeGemShop", c.key, nil)
+                        if ok then
+                            log("INFO", ("GemShop upgraded %s to %d (targeting)"):format(c.key, c.nextLevel))
+                            return true
+                        end
+                        return false
+                    end
+                end
+            end
+        end
+
+        if after == "cheapest" then
+            table.sort(candidates, function(a, b) return a.cost < b.cost end)
+        else
+            -- "priority": candidates are already in priority order based on scan
+        end
+
+        local c = candidates[1]
+        setLoopStatus("Manage", "GemShop upgrade", ("%s -> %d (cost %d)"):format(c.key, c.nextLevel, c.cost))
+        local ok = Network:InvokeServer("UpgradeGemShop", c.key, nil)
+        if ok then
+            log("INFO", ("GemShop upgraded %s to %d"):format(c.key, c.nextLevel))
+            return true
+        end
+        return false
+    end
+
+    -- Priority mode (old): first eligible in Priority order, but still respects Caps if provided.
+    local c = candidates[1]
+    setLoopStatus("Manage", "GemShop upgrade", ("%s -> %d (cost %d)"):format(c.key, c.nextLevel, c.cost))
+    local ok = Network:InvokeServer("UpgradeGemShop", c.key, nil)
+    if ok then
+        log("INFO", ("GemShop upgraded %s to %d"):format(c.key, c.nextLevel))
+        return true
+    end
+    return false
+end
+
+----------------------------------------------------------------
+-- WORLD/ZONE UNLOCK
+----------------------------------------------------------------
+
+local CollectionService = game:GetService("CollectionService")
+
+function Kaitun.GetPortalPosition(zoneName)
+    -- Get portal position from CollectionService IslandPart tags
+    if _zonePositions[zoneName] then
+        return _zonePositions[zoneName]
+    end
+    
+    for _, part in pairs(CollectionService:GetTagged("IslandPart")) do
+        if part.Name == zoneName then
+            _zonePositions[zoneName] = part.Position
+            return part.Position
+        end
+    end
+    return nil
+end
+
+function Kaitun.ScanForMachine(kind)
+    -- Scans workspace for machine models/parts of this kind
+    -- Returns position if found, nil otherwise
+    local candidates = {}
+    local namePattern = kind .. "Machine"
+    
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        local n = obj.Name
+        
+        -- Strict matching: only simple machine names, not pet meshes/parts
+        -- Valid: "Golden", "GoldenMachine", "Rainbow", "RainbowMachine"
+        -- Invalid: "Meshes/Golden Knight", "Golden_Cube.002", etc.
+        local isValidName = false
+        if n == namePattern or n == kind then
+            -- Exact matches: "GoldenMachine" or "Golden"
+            isValidName = true
+        elseif n:find(kind, 1, true) then
+            -- Contains "Golden/Rainbow" but reject mesh/geometry/collection folders
+            local lower = n:lower()
+            if not (lower:find("/") or lower:find("mesh") or lower:find("cube") or lower:find("sphere") or lower:find("%.%d") 
+                    or lower:find("pets") or lower:find("models") or lower:find("instances")) then
+                isValidName = true
+            end
+        end
+        
+        if isValidName then
+            if obj:IsA("Model") then
+                local pp = obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart", true)
+                if pp then
+                    table.insert(candidates, {model = obj, pos = pp.Position, name = n})
+                end
+            elseif obj:IsA("BasePart") then
+                table.insert(candidates, {model = obj, pos = obj.Position, name = n})
+            end
+        end
+    end
+    
+    if #candidates == 0 then
+        return nil
+    end
+    
+    -- Pick closest to character
+    local char = LocalPlayer.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if hrp and #candidates > 1 then
+        local playerPos = hrp.Position
+        table.sort(candidates, function(a, b)
+            local distA = (a.pos - playerPos).Magnitude
+            local distB = (b.pos - playerPos).Magnitude
+            return distA < distB
+        end)
+    end
+    
+    return candidates[1].pos
+end
+
+function Kaitun.GetMachinePosition(kind)
+    -- Auto-discovers machine locations by searching common zones
+    -- Remembers where machines are found for future sessions
+    if _machinePos[kind] then
+        return _machinePos[kind]
+    end
+
+    -- Try quick scan first
+    local pos = Kaitun.ScanForMachine(kind)
+    if pos then
+        _machinePos[kind] = pos
+        -- Remember current location
+        local world = Kaitun.GetWorld()
+        local zone = Kaitun.GetZone()
+        _machineLocations[kind] = {world = world, zone = zone, foundAt = os.clock()}
+        log("INFO", ("%s machine found in %s/%s"):format(kind, world, zone))
+        return pos
+    end
+    
+    -- Not found in current location — try searching unlocked zones
+    log("INFO", ("%s machine not found, searching unlocked zones..."):format(kind))
+    local data = Kaitun.GetData()
+    local portals = data and data.Portals or {}
+    local currentZone = Kaitun.GetZone()
+    
+    -- Build list of unlocked zones (from Replication.Data.Portals)
+    local searchZones = {"Spawn"}  -- Always try Spawn first (most common machine location)
+    for zoneName, isUnlocked in pairs(portals) do
+        if isUnlocked == true and zoneName ~= currentZone and zoneName ~= "Spawn" then
+            table.insert(searchZones, zoneName)
+        end
+    end
+    
+    for _, zoneName in ipairs(searchZones) do
+        if zoneName ~= currentZone then
+            -- Try teleporting to this zone
+            local ok = Network:InvokeServer("TeleportZone", zoneName)
+            if ok then
+                task.wait(2)  -- Wait for area to load
+                pos = Kaitun.ScanForMachine(kind)
+                if pos then
+                    _machinePos[kind] = pos
+                    _machineLocations[kind] = {world = Kaitun.GetWorld(), zone = zoneName, foundAt = os.clock()}
+                    log("INFO", ("%s machine found in zone %s!"):format(kind, zoneName))
+                    return pos
+                end
+            end
+        end
+    end
+    
+    -- Not found anywhere
+    log("WARN", ("%s machine not found in any searched zone"):format(kind))
+    return nil
+end
+
+function Kaitun.TeleportToMachine(kind)
+    local pos = Kaitun.GetMachinePosition(kind)
+    if not pos then return false end
+    local char = LocalPlayer.Character
+    if char and char.PrimaryPart then
+        -- Stand slightly in front of the machine
+        char:PivotTo(CFrame.new(pos + Vector3.new(0, 5, 8)))
+        return true
+    end
+    return false
+end
+
+function Kaitun.TeleportToPortal(zoneName)
+    local pos = Kaitun.GetPortalPosition(zoneName)
+    if not pos then return false end
+    local locked = Kaitun.IsTeleportLocked()
+    if locked then return false end
+    
+    local char = LocalPlayer.Character
+    if char and char.PrimaryPart then
+        setStatus("Teleporting to portal", zoneName)
+        char:PivotTo(CFrame.new(pos))
+        return true
+    end
+    return false
+end
+
+function Kaitun.BuyWorld(worldName)
+    setLoopStatus("Travel", "Buying world", worldName)
+    local result = Network:InvokeServer("BuyWorld", worldName)
+    return result
+end
+
+function Kaitun.TeleportWorld(worldName)
+    setLoopStatus("Travel", "Teleport world", worldName)
+    local locked, why = Kaitun.IsTeleportLocked()
+    if locked then
+        setLoopStatus("Travel", "Blocked", "teleport locked: " .. tostring(why))
+        return false
+    end
+    local result = Network:InvokeServer("TeleportWorld", worldName)
+    if result then
+        return true
+    end
+    return false
+end
+
+function Kaitun.TeleportToBestUnlockedZone()
+    -- Best zone = highest price unlocked (across accessible worlds)
+    local best = nil
+    for i = #_zoneOrder, 1, -1 do
+        local z = _zoneOrder[i]
+        if Kaitun.IsZoneUnlocked(z.name) then
+            local worldName = WORLD_NUM_TO_NAME[z.world] or "Main"
+            if Kaitun.HasWorld(worldName) then
+                best = z
+                break
+            end
+        end
+    end
+
+    if not best then
+        return false, "no unlocked zones"
+    end
+
+    local targetWorld = WORLD_NUM_TO_NAME[best.world] or "Main"
+    local currentWorld = Kaitun.GetWorld()
+    local currentZone = Kaitun.GetZone()
+
+    if currentZone == best.name and currentWorld == targetWorld then
+        return true, "already on best zone"
+    end
+
+    -- If best is in Space world, ensure we can travel there
+    if targetWorld ~= currentWorld then
+        if not Kaitun.HasWorld(targetWorld) then
+            local price = WorldData[targetWorld] and WorldData[targetWorld].Price or math.huge
+            if Kaitun.GetClicks() < price then
+                return false, ("need %s clicks to buy %s world"):format(formatNumber(price - Kaitun.GetClicks()), targetWorld)
+            end
+            local buy = Kaitun.BuyWorld(targetWorld)
+            if buy ~= true then
+                return false, tostring(buy)
+            end
+        end
+
+        if not Kaitun.TeleportWorld(targetWorld) then
+            return false, "teleport world failed"
+        end
+        task.wait(1)
+    end
+
+    -- Confirm multiplier signal using game-side formula (TapButton UI calc)
+    local beforeZone = Kaitun.GetZone()
+    local beforeZoneMulti = Kaitun.GetZoneMulti(beforeZone)
+    local beforeTap = Kaitun.GetTapAmountEstimate()
+    setLoopStatus("Travel", "Teleport zone", best.name)
+    local ok = Network:InvokeServer("TeleportZone", best.name)
+    task.wait(0.8)
+    local afterZone = Kaitun.GetZone()
+    local afterZoneMulti = Kaitun.GetZoneMulti(afterZone)
+    local afterTap = Kaitun.GetTapAmountEstimate()
+
+    if Config.AutoTravel.ConfirmMultiplier then
+        log("INFO", ("ZoneMulti %s -> %s | TapEst %s -> %s | Now=%s"):format(
+            tostring(beforeZoneMulti),
+            tostring(afterZoneMulti),
+            formatNumber(beforeTap),
+            formatNumber(afterTap),
+            tostring(afterZone)
+        ))
+    end
+
+    if ok then
+        return true, ("moved to %s (%s world)"):format(best.name, targetWorld)
+    end
+    return false, "teleport zone failed"
+end
+
+function Kaitun.UnlockZone(zoneName)
+    setStatus("Unlocking", zoneName)
+    local result = Network:InvokeServer("UnlockZone", zoneName)
+    if result then
+        log("INFO", ("Unlocked zone: %s"):format(zoneName))
+        return true
+    end
+    return false
+end
+
+function Kaitun.TeleportZone(zoneName)
+    setStatus("Teleporting", zoneName)
+    local locked, why = Kaitun.IsTeleportLocked()
+    if locked then
+        setLoopStatus("Travel", "Blocked", "teleport locked: " .. tostring(why))
+        return false
+    end
+    local result = Network:InvokeServer("TeleportZone", zoneName)
+    if result then
+        log("INFO", ("Teleported to: %s"):format(zoneName))
+        return true
+    end
+    return false
+end
+
+function Kaitun.GetNextLockedZone()
+    -- Returns next zone that isn't unlocked yet, but only for the current world.
+    local currentWorld = Kaitun.GetWorld()
+    for _, zone in ipairs(_zoneOrder) do
+        local zoneWorldName = WORLD_NUM_TO_NAME[zone.world] or "Main"
+        if zoneWorldName == currentWorld and not Kaitun.IsZoneUnlocked(zone.name) then
+            return zone.name, zone.price
+        end
+    end
+    return nil, nil
+end
+
+----------------------------------------------------------------
+-- PLAZA BOOTH MANAGEMENT
+----------------------------------------------------------------
+
+function Kaitun.IsInPlaza()
+    return game.PlaceId == NORMAL_PLAZA_PLACE_ID or game.PlaceId == SECRET_PLAZA_PLACE_ID
+end
+
+function Kaitun.IsInSecretPlaza()
+    return game.PlaceId == SECRET_PLAZA_PLACE_ID
+end
+
+function Kaitun.FindUnclaimedBooth()
+    -- Secret Plaza: booths are in workspace.SecretPlaza
+    -- Normal Plaza: booths are in workspace.Game.Booths
+    local boothsFolder
+    if game.PlaceId == SECRET_PLAZA_PLACE_ID then
+        boothsFolder = workspace:FindFirstChild("SecretPlaza")
+    else
+        boothsFolder = workspace:FindFirstChild("Game") and workspace.Game:FindFirstChild("Booths")
+    end
+    if not boothsFolder then return nil end
+
+    for _, booth in ipairs(boothsFolder:GetChildren()) do
+        if booth:IsA("Model") and booth.Name:lower():find("booth") then
+            local owner = booth:GetAttribute("BoothOwner")
+            if not owner or owner == 0 then
+                return booth
+            end
+        end
+    end
+    return nil
+end
+
+function Kaitun.FindMyBooth()
+    -- Secret Plaza: booths are in workspace.SecretPlaza
+    -- Normal Plaza: booths are in workspace.Game.Booths
+    local boothsFolder
+    if game.PlaceId == SECRET_PLAZA_PLACE_ID then
+        boothsFolder = workspace:FindFirstChild("SecretPlaza")
+    else
+        boothsFolder = workspace:FindFirstChild("Game") and workspace.Game:FindFirstChild("Booths")
+    end
+    if not boothsFolder then return nil end
+
+    local myId = LocalPlayer.UserId
+    for _, booth in ipairs(boothsFolder:GetChildren()) do
+        if booth:IsA("Model") and booth.Name:lower():find("booth") then
+            local owner = booth:GetAttribute("BoothOwner")
+            if owner == myId then
+                return booth
+            end
+        end
+    end
+    return nil
+end
+
+function Kaitun.ClaimBoothModel(boothModel)
+    local result = Network:InvokeServer("ClaimBooth", boothModel)
+    return result
+end
+
+function Kaitun.WaitForBoothClaim()
+    log("INFO", "Plaza detected - waiting for booth claim before starting automation...")
+    
+    -- Check if we already have a booth
+    local myBooth = Kaitun.FindMyBooth()
+    if myBooth then
+        log("INFO", "Already have a booth claimed: " .. myBooth.Name)
+        return true
+    end
+    
+    -- Try to claim an unclaimed booth
+    local maxAttempts = 60  -- Try for up to 60 seconds
+    for attempt = 1, maxAttempts do
+        local booth = Kaitun.FindUnclaimedBooth()
+        if booth then
+            log("INFO", "Found unclaimed booth: " .. booth.Name .. " - claiming...")
+            local result = Kaitun.ClaimBoothModel(booth)
+            if result then
+                log("INFO", "Booth claimed successfully!")
+                return true
+            else
+                log("WARN", "Failed to claim booth, retrying...")
+            end
+        else
+            log("DEBUG", "No unclaimed booths found, waiting...")
+        end
+        
+        -- Check if we now have a booth (might have been claimed by another method/script)
+        myBooth = Kaitun.FindMyBooth()
+        if myBooth then
+            log("INFO", "Booth acquired: " .. myBooth.Name)
+            return true
+        end
+        
+        task.wait(1)
+    end
+    
+    log("WARN", "Could not claim a booth after " .. maxAttempts .. " attempts - continuing anyway")
+    return false
+end
+
+function Kaitun.TryUnlockZone()
+    local cfg = Config.WorldUnlock
+    if not cfg.Enabled then return false end
+    
+    local zoneName, price = Kaitun.GetNextLockedZone()
+    if not zoneName then
+        -- If we're in Main and done unlocking all Main zones:
+        if Kaitun.GetWorld() == "Main" then
+            -- Auto-buy Space world once we can afford it (requires Space portal + all W1 portals)
+            if cfg.AutoBuyWorld2 and not Kaitun.HasWorld("Space") then
+                local spacePrice = (WorldData.Space and WorldData.Space.Price) or math.huge
+                if Kaitun.IsZoneUnlocked("Space") then
+                    if Kaitun.GetClicks() >= spacePrice then
+                        setLoopStatus("Unlock", "Buying world", "Space")
+                        local r = Kaitun.BuyWorld("Space")
+                        if r == true then
+                            setLoopStatus("Unlock", "Teleport world", "Space")
+                            Kaitun.TeleportWorld("Space")
+                            task.wait(1)
+                            return true
+                        else
+                            setLoopStatus("Unlock", "Waiting", tostring(r))
+                        end
+                    else
+                        setLoopStatus("Unlock", "Waiting", ("Need %s clicks for Space world"):format(formatNumber(spacePrice - Kaitun.GetClicks())))
+                    end
+                else
+                    setLoopStatus("Unlock", "Unlocking", "Space (World 1 portal required)")
+                end
+            end
+
+            -- If we already own Space world, switch to it to continue unlocking world2 zones
+            if Kaitun.HasWorld("Space") then
+                setLoopStatus("Unlock", "Switching world", "Space")
+                Kaitun.TeleportWorld("Space")
+                task.wait(1)
+            end
+        end
+        return false -- All unlocked
+    end
+    
+    setLoopStatus("Unlock", "Unlocking", zoneName .. " (FREE via teleport)")
+    
+    -- Teleport to portal position to bypass click cost
+    if Kaitun.TeleportToPortal(zoneName) then
+        task.wait(0.5)
+        
+        if Kaitun.UnlockZone(zoneName) then
+            if cfg.AutoTeleport then
+                task.wait(0.3)
+                Kaitun.TeleportZone(zoneName)
+            end
+            return true
+        end
+    end
+    
+    return false
+end
+
+----------------------------------------------------------------
+-- AUTO DELETE LOGIC
+----------------------------------------------------------------
+
+-- Calculate effective power of a pet (used for KeepBest ranking)
+function Kaitun.GetPetPower(pet)
+    if not pet or not pet.Name then return 0 end
+
+    -- Game-accurate power calc:
+    -- PetStats:GetMulti(baseMulti, tier, level, petTable)
+    -- where baseMulti is Multi1/Multi2 from the pet instance (not yet tier/level adjusted).
+    local base = tonumber(pet.Multi1 or pet.Multiplier1)
+    if not base then
+        local petData = PetStats.Pets and PetStats.Pets[pet.Name]
+        base = tonumber(petData and petData.Multiplier1) or 0
+    end
+    if base <= 0 then return 0 end
+
+    local tier = pet.Tier or "Normal"
+    local level = tonumber(pet.Level) or 0
+
+    -- Ensure the table passed has Name/Mutation like the game expects.
+    local ctx = pet
+    if type(ctx) ~= "table" then
+        ctx = { Name = pet.Name, Mutation = pet.Mutation }
+    elseif ctx.Name == nil then
+        ctx = { Name = pet.Name, Mutation = pet.Mutation }
+    end
+
+    local ok, v = pcall(function()
+        return PetStats:GetMulti(base, tier, level, ctx)
+    end)
+    if ok and tonumber(v) then
+        return tonumber(v)
+    end
+    return base
+end
+
+function Kaitun.ShouldDeletePet(pet, protectedIds, petId)
+    local cfg = Config.Pets.AutoDelete
+    if not cfg.Enabled then return false end
+    
+    -- Never delete locked pets
+    if pet.Locked then return false end
+    
+    -- Never delete equipped pets
+    if pet.Equipped then return false end
+    
+    -- Keep special tiers (Golden, Diamond, Rainbow)
+    local tier = pet.Tier or "Normal"
+    if cfg.KeepTiers and cfg.KeepTiers[tier] then return false end
+    
+    -- Check if this pet is in the protected "best" list
+    local id = petId or pet.Id or pet.id
+    if protectedIds and id and protectedIds[id] then
+        return false
+    end
+    
+    -- Don't delete if needed for index (not yet discovered in this tier)
+    if pet.Name and pet.Tier then
+        local isDiscovered = Kaitun.IsPetDiscovered(pet.Name, pet.Tier)
+        if not isDiscovered then
+            -- This is a new discovery for this tier - keep it for index
+            return false
+        end
+    end
+    
+    -- NEVER delete Secret rarity pets (Secret I, Secret II, Secret III, etc.)
+    local rarity = PetStats:GetRarity(pet.Name)
+    if rarity and tostring(rarity):find("Secret") then
+        return false  -- Absolute protection for all Secret variants
+    end
+    
+    -- Check rarity - only delete if in DeleteRarities
+    if cfg.DeleteRarities and cfg.DeleteRarities[rarity] then
+        return true
+    end
+    
+    return false
+end
+
+function Kaitun.CleanupPets()
+    local cfg = Config.Pets.AutoDelete
+    if not cfg.Enabled then return 0 end
+    
+    local petCount = Kaitun.GetPetCount()
+    if petCount < cfg.MaxPets then return 0 end
+    
+    -- Don't start multiple cleanup tasks
+    if _cleanupRunning then return 0 end
+    _cleanupRunning = true
+
+    local deleted = 0
+    local keepBest = tonumber(cfg.KeepBest) or 0
+
+    local ok, err = pcall(function()
+        setLoopStatus("Hatch", "Cleaning inventory", petCount .. "/" .. cfg.MaxPets .. " pets")
+
+        local pets = Kaitun.GetPets()
+
+        -- Build list of pets with their power for sorting (do NOT mutate replication pet tables)
+        local petList = {}
+        for id, pet in pairs(pets) do
+            local power = 0
+            local okP = pcall(function()
+                power = Kaitun.GetPetPower(pet)
+            end)
+            if not okP then power = 0 end
+            petList[#petList + 1] = {id = id, pet = pet, power = power}
+        end
+
+        -- Sort by power descending (best first)
+        table.sort(petList, function(a, b) return a.power > b.power end)
+
+        -- Build protected set of top N pets by power
+        local protectedIds = {}
+        for i = 1, math.min(keepBest, #petList) do
+            protectedIds[petList[i].id] = true
+        end
+
+        -- Delete worst pets first (iterate from end of sorted list)
+        for i = #petList, 1, -1 do
+            local entry = petList[i]
+            if Kaitun.ShouldDeletePet(entry.pet, protectedIds, entry.id) then
+                local okD, did = pcall(Kaitun.DeletePet, entry.id)
+                if okD and did then
+                    deleted = deleted + 1
+                    task.wait(0.1)
+                end
+
+                -- Stop if we're below target
+                if Kaitun.GetPetCount() < cfg.MaxPets - 10 then
+                    break
+                end
+            end
+        end
+    end)
+
+    if not ok then
+        log("ERROR", ("CleanupPets crashed: %s"):format(tostring(err)))
+    elseif deleted > 0 then
+        log("INFO", ("Deleted %d pets (kept best %d)"):format(deleted, keepBest))
+    end
+
+    _cleanupRunning = false
+    return deleted
+end
+
+----------------------------------------------------------------
+-- AUTOMATION LOOPS
+----------------------------------------------------------------
+
+function Kaitun.TapLoop()
+    while _running do
+        if Config.AutoTap.Enabled then
+            -- Throttle status updates; don't allocate/format every tap tick
+            local now = os.clock()
+            if (now - (_cache.tapStatusTs or 0)) >= 1.0 then
+                _cache.tapStatusTs = now
+                setLoopStatus("Tap", "Tapping", "")
+            end
+            Kaitun.Tap()
+        end
+        task.wait(Config.AutoTap.Delay)
+    end
+end
+
+function Kaitun.HatchLoop()
+    while _running do
+        -- TEST MODE: Bypass ALL logic, just fire OpenEgg directly
+        local testMode = Config.EggHatching.TestMode
+        if testMode and testMode.Enabled then
+            local egg = testMode.Egg or "Basic"
+            local delay = testMode.Delay or 0.5
+
+            -- Resolve amount: auto-detect from gamepass or use explicit value
+            local amt = testMode.Amount
+            if amt == "auto" or amt == nil then
+                -- Try to read gamepass data
+                local gpOk, gpData = pcall(function()
+                    return Kaitun.GetOwnedGamepasses()
+                end)
+
+                -- DEBUG: Print what we got
+                log("DEBUG", ("TEST MODE GP: gpOk=%s, gpData type=%s"):format(tostring(gpOk), typeof(gpData)))
+                if gpData and typeof(gpData) == "table" then
+                    for k, v in pairs(gpData) do
+                        log("DEBUG", ("  GP[%s] = %s (%s)"):format(tostring(k), tostring(v), typeof(v)))
+                    end
+                end
+
+                if not gpOk or gpData == nil then
+                    -- Failed to read gamepass data - set UI background red
+                    log("ERROR", "TEST MODE: Failed to read gamepass data!")
+                    _overlayStats.testModeError = true
+                    amt = 3  -- Fallback to default
+                elseif gpData.x8Egg == true then
+                    amt = 8
+                    log("INFO", "TEST MODE: Detected x8Egg gamepass -> using 8")
+                else
+                    amt = 3
+                    log("INFO", "TEST MODE: No x8Egg gamepass -> using 3")
+                end
+            end
+
+            setLoopStatus("Hatch", "TEST MODE", ("%s x%d"):format(egg, amt))
+
+            -- Direct remote call - no checks, no validation, no nothing
+            local result = Network:InvokeServer("OpenEgg", egg, amt, {})
+
+            if result and typeof(result) == "table" and #result > 0 then
+                log("INFO", ("TEST HATCH: %s x%d -> got %d pets:"):format(egg, amt, #result))
+                for i, pet in ipairs(result) do
+                    local petName = pet[1] or "Unknown"
+                    local tier = pet[2] or "?"
+                    local mutation = pet[3]
+                    local mutStr = mutation and (" [" .. mutation .. "]") or ""
+                    log("INFO", ("  %d. %s (Tier %s)%s"):format(i, petName, tostring(tier), mutStr))
+                end
+            elseif result then
+                log("WARN", ("TEST HATCH: %s x%d -> unexpected result: %s"):format(egg, amt, tostring(result)))
+            else
+                log("WARN", ("TEST HATCH: %s x%d -> nil (remote not found or failed)"):format(egg, amt))
+            end
+
+            task.wait(delay)
+            continue  -- Skip all normal logic
+        end
+
+        if Config.EggHatching.Enabled then
+            -- Check inventory space first (spawn cleanup in background to not block hatching)
+            if Kaitun.GetPetCount() >= (Config.Pets.AutoDelete.MaxPets or 90) and not _cleanupRunning then
+                task.spawn(function()
+                    pcall(Kaitun.CleanupPets)
+                end)  -- Background cleanup, doesn't block hatching
+            end
+
+            local amt = Kaitun.ResolveHatchAmount(Config.EggHatching.Amount)
+            local targetEgg, why = Kaitun.ResolveHatchTarget(amt)
+            
+            -- Warmup override: force single hatch for first few eggs
+            local hatchAmount = Config.EggHatching.Amount
+            if why == "warmup_single" then
+                amt = 1
+                hatchAmount = 1
+            end
+            
+            if targetEgg and why then
+                setLoopStatus("Hatch", "Target", ("%s (%s)"):format(targetEgg, why))
+            end
+            
+            if targetEgg then
+                local ok, cost, have, currency = Kaitun.CanAffordEgg(targetEgg, amt)
+
+                if ok then
+                    local success, result = Kaitun.HatchEgg(targetEgg, hatchAmount)
+                    -- InvokeServer yields, but add safety wait in case it returns instantly
+                    -- Using 0.01 instead of task.wait() to avoid full frame delay at low FPS
+                    task.wait(0.01)
+                    if success then
+                        -- Priority egg succeeded - update last success time
+                        if why == "priority" and _cache.priorityEggFailed then
+                            _cache.priorityEggFailed.lastSuccessTs = os.clock()
+                            _cache.priorityEggFailed.cooldownUntil = 0
+                            _cache.priorityEggFailed.reason = nil
+                        end
+                        
+                        local every = tonumber(Config.EggHatching.LogEvery) or 0
+                        local eggsOpened = (Kaitun.GetData().Statistics and Kaitun.GetData().Statistics.Eggs) or 0
+                        if every > 0 and (eggsOpened % every == 0) then
+                            -- Avoid building huge strings every hatch
+                            local shown = {}
+                            for i = 1, math.min(#result, 3) do
+                                shown[i] = result[i]
+                            end
+                            local suffix = (#result > 3) and (" +%d more"):format(#result - 3) or ""
+                            log("INFO", ("Hatched %s: %s%s"):format(targetEgg, table.concat(shown, ", "), suffix))
+                        end
+                    else
+                        -- Hatch failed - if it's priority egg and NOT "broke", check time-based fallback
+                        -- If we're full, kick off cleanup ASAP (even if hatch failed before our next tick)
+                        if tostring(result):lower():find("pet slots") or tostring(result):lower():find("inventory") then
+                            task.spawn(function()
+                                pcall(Kaitun.CleanupPets)
+                            end)
+                        end
+
+                        if why == "priority" and result ~= "Not enough currency" then
+                            local now = os.clock()
+                            local lastSuccess = _cache.priorityEggFailed.lastSuccessTs or 0
+                            local timeSinceSuccess = now - lastSuccess
+                            
+                            -- If no success within 10s, enter cooldown
+                            if timeSinceSuccess >= 10 and lastSuccess > 0 then
+                                local retryDelay = tonumber(Config.EggHatching.PriorityRetryDelay) or 30
+                                _cache.priorityEggFailed.cooldownUntil = now + retryDelay
+                                _cache.priorityEggFailed.reason = tostring(result)
+                                log("WARN", ("Priority egg %s no success in 10s (%s), falling back to progression for %ds"):format(
+                                    targetEgg, result, retryDelay
+                                ))
+                            elseif lastSuccess == 0 then
+                                -- First attempt failed, initialize timer
+                                _cache.priorityEggFailed.lastSuccessTs = now
+                            end
+                        end
+                    end
+                else
+                    local need = math.max(0, (tonumber(cost) or 0) - (tonumber(have) or 0))
+                    setLoopStatus("Hatch", "Farming", ("Need %s %s for %s x%d"):format(formatNumber(need), tostring(currency or "Clicks"), targetEgg, amt))
+                    task.wait() -- Can't afford - wait before retry
+                end
+            else
+                setLoopStatus("Hatch", "Farming", "No eggs unlocked")
+                task.wait() -- No target - wait before retry
+            end
+        else
+            task.wait() -- Hatching disabled - wait before checking again
+        end
+    end
+end
+
+function Kaitun.MinigameLoop()
+    while _running do
+        if Config.Minigames.Enabled then
+            local anyEnabled = false
+            local played = false
+
+            for gameName, enabled in pairs(Config.Minigames.Games) do
+                if enabled then
+                    anyEnabled = true
+                    local canPlay, remaining = Kaitun.CanPlayMinigame(gameName)
+                    if canPlay then
+                        setLoopStatus("Minigame", "Playing", gameName)
+                        local success, result = Kaitun.PlayMinigame(gameName)
+                        played = success or played
+                        local mgCompleted = (Kaitun.GetData().Statistics and Kaitun.GetData().Statistics.MinigamesCompleted) or 0
+                        if success and mgCompleted % 50 == 0 then
+                            log("INFO", ("Minigames played: %d"):format(mgCompleted))
+                        elseif not success and result then
+                            setLoopStatus("Minigame", "Waiting", gameName .. " " .. tostring(result))
+                        end
+                        task.wait(Config.Minigames.Delay or 0.2)
+                    else
+                        setLoopStatus("Minigame", "Cooldown", ("%s %ds"):format(gameName, math.floor(remaining)))
+                    end
+                end
+            end
+
+            if not anyEnabled then
+                setLoopStatus("Minigame", "Idle", "")
+                task.wait(1)
+            elseif not played then
+                -- If nothing was playable, don't spam checks
+                task.wait(3)
+            end
+        end
+        task.wait(0.1)
+    end
+end
+
+function Kaitun.UnlockLoop()
+    while _running do
+        if Config.WorldUnlock.Enabled then
+            -- Warmup: don't unlock zones until we have some basic pets discovered
+            local data = Kaitun.GetData()
+            local discoveredCount = (data and data.DiscoveredCount) or 0
+            if discoveredCount < 5 then
+                setLoopStatus("Unlock", "Warmup", "waiting for 5 discovered pets")
+                task.wait(5)
+                continue
+            end
+            
+            local locked, why = Kaitun.IsTeleportLocked()
+            if locked then
+                setLoopStatus("Unlock", "Blocked", "teleport locked: " .. tostring(why))
+                task.wait(2)
+                continue
+            end
+            -- Keep trying to unlock zones until all are done
+            setLoopStatus("Unlock", "Checking", "")
+            local unlocked = Kaitun.TryUnlockZone()
+            if unlocked then
+                task.wait(1)
+            else
+                task.wait(10) -- Check less often when nothing to unlock
+            end
+        else
+            setLoopStatus("Unlock", "Idle", "")
+            task.wait(10)
+        end
+    end
+end
+
+function Kaitun.TravelLoop()
+    while _running do
+        if Config.AutoTravel.Enabled then
+            local locked, why = Kaitun.IsTeleportLocked()
+            if locked then
+                setLoopStatus("Travel", "Blocked", "teleport locked: " .. tostring(why))
+                task.wait(2)
+                continue
+            end
+            setLoopStatus("Travel", "Evaluating", "best island")
+            local ok, info = Kaitun.TeleportToBestUnlockedZone()
+            if not ok and info then
+                setLoopStatus("Travel", "Waiting", info)
+            elseif ok then
+                setLoopStatus("Travel", "On best island", info or "")
+            end
+        else
+            setLoopStatus("Travel", "Idle", "")
+        end
+        task.wait(Config.AutoTravel.Interval or 15)
+    end
+end
+
+function Kaitun.ManagementLoop()
+    while _running do
+        setLoopStatus("Manage", "Managing", "equip/rebirth/upgrades")
+        
+        -- Auto equip best
+        if Config.Pets.AutoEquipBest then
+            Kaitun.EquipBest()
+        end
+        
+        -- Auto rebirth
+        Kaitun.TryRebirth()
+        
+        -- Auto gemshop upgrades (global click multiplier, rebirth buttons, etc.)
+        Kaitun.TryGemShopUpgrade()
+        
+        task.wait(0.5)  -- Very fast cadence for clicker games (checks rebirth ~2x per second)
+    end
+end
+
+function Kaitun.CraftingLoop()
+    while _running do
+        if Config.Crafting.Enabled then
+            setLoopStatus("Craft", "Running", "")
+            -- Priority: claim/queue rainbow, then golden, then void
+            local did = false
+            did = Kaitun.TryAutoRainbow() or did
+            did = Kaitun.TryAutoGolden() or did
+            did = Kaitun.TryAutoVoid() or did
+            if not did then
+                setLoopStatus("Craft", "Idle", "nothing craftable")
+            end
+        else
+            setLoopStatus("Craft", "Idle", "")
+        end
+        task.wait(Config.Crafting.Interval or 8)
+    end
+end
+
+function Kaitun.QuestLoop()
+    while _running do
+        -- Warmup: don't claim quests until we have some basic pets discovered
+        local data = Kaitun.GetData()
+        local discoveredCount = (data and data.DiscoveredCount) or 0
+        if discoveredCount < 5 then
+            setLoopStatus("Quest", "Warmup", "waiting for 5 discovered pets")
+            task.wait(5)
+        else
+            Kaitun.TryClaimQuests()
+        end
+        local interval = (Config.Quests and Config.Quests.AutoClaim and Config.Quests.AutoClaim.Interval) or 10
+        task.wait(interval)
+    end
+end
+
+function Kaitun.PotionLoop()
+    while _running do
+        if Config.PotionMachine and Config.PotionMachine.Enabled then
+            Kaitun.TryBuyPotion()
+        else
+            setLoopStatus("Potion", "Idle", "")
+        end
+        local interval = (Config.PotionMachine and Config.PotionMachine.Interval) or 30
+        task.wait(interval)
+    end
+end
+
+function Kaitun.RankRewardLoop()
+    while _running do
+        if Config.RankRewards and Config.RankRewards.Enabled then
+            Kaitun.TryClaimRankReward()
+        else
+            setLoopStatus("Rank", "Idle", "")
+        end
+        local interval = (Config.RankRewards and Config.RankRewards.Interval) or 15
+        task.wait(interval)
+    end
+end
+
+function Kaitun.ElectricWheelLoop()
+    while _running do
+        if Config.ElectricWheel and Config.ElectricWheel.Enabled then
+            Kaitun.TrySpinElectricWheel()
+        else
+            setLoopStatus("ElectricWheel", "Idle", "")
+        end
+        local interval = (Config.ElectricWheel and Config.ElectricWheel.Interval) or 30
+        task.wait(interval)
+    end
+end
+
+function Kaitun.PetIndexRewardLoop()
+    while _running do
+        Kaitun.TryClaimPetIndexRewards()
+        local interval = (Config.PetIndex and Config.PetIndex.AutoClaimRewards and Config.PetIndex.AutoClaimRewards.Interval) or 20
+        task.wait(interval)
+    end
+end
+
+-- Send token data to dashboard API
+function Kaitun.SendTokenToDashboard(tokens)
+    local cfg = Config.Webhook and Config.Webhook.Tokens
+    if not cfg or not cfg.DashboardAPI or cfg.DashboardAPI == "" then return end
+    
+    task.spawn(function()
+        pcall(function()
+            local req = getRequestFn()
+            
+            if not req then return end
+            
+            local http = game:GetService("HttpService")
+            local payload = http:JSONEncode({
+                username = LocalPlayer.Name,
+                tokens = tokens
+            })
+            
+            req({
+                Url = cfg.DashboardAPI,
+                Method = "POST",
+                Headers = {["Content-Type"] = "application/json"},
+                Body = payload,
+            })
+        end)
+    end)
+end
+
+function Kaitun.TokenTrackLoop()
+    local cfg = Config.Webhook and Config.Webhook.Tokens
+    if not cfg or not cfg.Enabled then return end
+    
+    -- Initialize with current tokens
+    local data = Kaitun.GetData()
+    _lastTokenCount = (data and data.Items and data.Items.Tokens) or 0
+    log("INFO", ("Token tracking started (current: %.2f)"):format(_lastTokenCount))
+    
+    local interval = cfg.Interval or 5
+    while _running do
+        task.wait(interval)
+        
+        local currentData = Kaitun.GetData()
+        local currentTokens = (currentData and currentData.Items and currentData.Items.Tokens) or 0
+        
+        -- Send to dashboard API (always, regardless of change)
+        Kaitun.SendTokenToDashboard(currentTokens)
+        
+        -- Send webhook only if gain >= MinChange
+        if _lastTokenCount and currentTokens > _lastTokenCount then
+            Kaitun.SendTokenWebhook(_lastTokenCount, currentTokens)
+        end
+        
+        _lastTokenCount = currentTokens
+    end
+end
+
+----------------------------------------------------------------
+-- GAMEPASS AUTO-BUY
+----------------------------------------------------------------
+
+function Kaitun.SendGamepassWebhook(gamepassName, tokenCost, tokensAfter)
+    local cfg = Config.GamepassAutoBuy
+    if not cfg or not cfg.WebhookURL or cfg.WebhookURL == "" then return end
+    
+    task.spawn(function()
+        pcall(function()
+            local req = getRequestFn()
+            
+            if not req then return end
+            
+            local http = game:GetService("HttpService")
+            local payload = http:JSONEncode({
+                content = nil,
+                embeds = {{
+                    title = "🎫 Gamepass Purchased!",
+                    color = 5763719,  -- Green
+                    fields = {
+                        { name = "Account", value = LocalPlayer.Name, inline = true },
+                        { name = "Gamepass", value = gamepassName, inline = true },
+                        { name = "Tokens Spent", value = tostring(tokenCost), inline = true },
+                        { name = "Tokens Remaining", value = tostring(math.floor(tokensAfter)), inline = true },
+                    },
+                    footer = { text = "Kaitun Gamepass Auto-Buy" },
+                    timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ"),
+                }}
+            })
+            
+            req({
+                Url = cfg.WebhookURL,
+                Method = "POST",
+                Headers = {["Content-Type"] = "application/json"},
+                Body = payload,
+            })
+        end)
+    end)
+end
+
+function Kaitun.GamepassAutoBuyLoop()
+    local cfg = Config.GamepassAutoBuy
+    if not cfg or not cfg.Enabled then return end
+    
+    local priority = cfg.Priority
+    if not priority or #priority == 0 then
+        log("WARN", "GamepassAutoBuy enabled but no priority list set")
+        return
+    end
+    
+    -- Uses Network shim defined at top of script
+    
+    -- Get Marketplace module for token prices
+    local Marketplace
+    pcall(function()
+        Marketplace = require(ReplicatedStorage.Game.Marketplace)
+    end)
+    if not Marketplace or not Marketplace.Gamepasses then
+        log("ERROR", "GamepassAutoBuy: Could not load Marketplace module")
+        return
+    end
+    
+    log("INFO", ("GamepassAutoBuy started - %d gamepasses in priority list"):format(#priority))
+    
+    local interval = cfg.Interval or 30
+    
+    while _running do
+        task.wait(interval)
+        
+        -- Get current data
+        local data = Kaitun.GetData()
+        if not data then continue end
+        
+        -- Only count REGULAR tokens (not PaidTokens) for affordability check
+        -- This ensures we don't buy gamepasses with paid tokens
+        -- Server may still choose to use paid tokens, but we won't INITIATE a purchase
+        -- unless we have enough regular tokens
+        local currentTokens = (data.Items and data.Items.Tokens) or 0
+        local ownedPasses = data.Gamepasses or {}
+        
+        -- Find the next gamepass we need to buy
+        local targetPass = nil
+        local targetCost = 0
+        
+        for i = _gamepassBuyIndex, #priority do
+            local passName = priority[i]
+            -- Skip if set to false or already owned
+            if passName and passName ~= false and not ownedPasses[passName] then
+                -- Get cost from Marketplace
+                local passData = Marketplace.Gamepasses[passName]
+                if passData and passData.TokenPrice then
+                    targetPass = passName
+                    targetCost = passData.TokenPrice
+                    _gamepassBuyIndex = i
+                    break
+                else
+                    log("WARN", ("GamepassAutoBuy: Unknown gamepass '%s', skipping"):format(tostring(passName)))
+                    _gamepassBuyIndex = i + 1
+                end
+            else
+                -- Skip this one (false or already owned)
+                _gamepassBuyIndex = i + 1
+            end
+        end
+        
+        -- If we've gone through all, stop checking
+        if not targetPass then
+            if _gamepassBuyIndex > #priority then
+                log("INFO", "GamepassAutoBuy: All gamepasses in priority list owned or skipped")
+                return  -- Exit loop, we're done
+            end
+            continue
+        end
+        
+        -- Check if we have enough tokens
+        if currentTokens >= targetCost then
+            log("INFO", ("GamepassAutoBuy: Attempting to buy %s for %d tokens"):format(targetPass, targetCost))
+            
+            local success = false
+            pcall(function()
+                success = Network:InvokeServer("PurchaseGamepassWithTokens", targetPass)
+            end)
+            
+            if success then
+                -- Get updated tokens
+                local newData = Kaitun.GetData()
+                local newTokens = (newData and newData.Items and newData.Items.Tokens) or 0
+                
+                log("INFO", ("GamepassAutoBuy: Successfully purchased %s! Tokens: %d -> %d"):format(targetPass, math.floor(currentTokens), math.floor(newTokens)))
+                
+                -- Send webhook
+                Kaitun.SendGamepassWebhook(targetPass, targetCost, newTokens)
+                
+                -- Move to next in priority
+                _gamepassBuyIndex = _gamepassBuyIndex + 1
+            else
+                log("WARN", ("GamepassAutoBuy: Failed to purchase %s"):format(targetPass))
+            end
+        else
+            -- Saving for this gamepass
+            local needed = targetCost - currentTokens
+            log("DEBUG", ("GamepassAutoBuy: Saving for %s - need %d more tokens (%d/%d)"):format(targetPass, math.floor(needed), math.floor(currentTokens), targetCost))
+        end
+    end
+end
+
+----------------------------------------------------------------
+-- ANTI-AFK (requested method: getgenv().AutoJumpRunning + VirtualInputManager Space)
+----------------------------------------------------------------
+
+function Kaitun.StartAutoJump()
+    local cfg = Config.AntiAFK
+    if not cfg or not cfg.Enabled then
+        setLoopStatus("AFK", "Idle", "")
+        return false
+    end
+
+    -- Match user's desired toggle flag name.
+    if _ENVROOT.AutoJumpRunning then
+        _ENVROOT.AutoJumpRunning = false
+        task.wait(0.05)
+    end
+    _ENVROOT.AutoJumpRunning = true
+
+    local VIM = game:GetService("VirtualInputManager")
+    local PERIOD = tonumber(cfg.Interval) or 180
+    if PERIOD < 30 then PERIOD = 30 end
+
+    task.spawn(function()
+        while _running and _ENVROOT.AutoJumpRunning do
+            setLoopStatus("AFK", "Jump", "")
+            VIM:SendKeyEvent(true, Enum.KeyCode.Space, false, game)
+            task.wait(0.02)
+            VIM:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
+            setLoopStatus("AFK", "Waiting", ("%ds"):format(math.floor(PERIOD)))
+            task.wait(PERIOD)
+        end
+        setLoopStatus("AFK", "Idle", "")
+    end)
+
+    return true
+end
+
+----------------------------------------------------------------
+-- MAIN
+----------------------------------------------------------------
+
+----------------------------------------------------------------
+-- CUSTOM OVERLAY UI
+----------------------------------------------------------------
+
+local _overlayGui = nil
+local _overlayStats = {
+    startTime = 0,
+    -- Rolling window samples for eggs/sec (5m avg)
+    eggsSamples = {}, -- { {ts=number, eggs=number}, ... }
+    eggsPerSec = 0,   -- computed rolling average
+    testModeError = false,  -- Set to true if gamepass detection fails
+}
+
+function Kaitun.CreateOverlayUI()
+    -- Create full-screen overlay with stats
+    local playerGui = LocalPlayer:WaitForChild("PlayerGui")
+    
+    local screenGui = Instance.new("ScreenGui")
+    screenGui.Name = "KaitunOverlay"
+    screenGui.DisplayOrder = 999999  -- On top of everything
+    screenGui.ResetOnSpawn = false
+    screenGui.IgnoreGuiInset = true
+    
+    -- Background frame (black, or green if has Secret)
+    local bg = Instance.new("Frame")
+    bg.Name = "Background"
+    bg.Size = UDim2.fromScale(1, 1)
+    bg.Position = UDim2.fromScale(0, 0)
+    bg.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+    bg.BorderSizePixel = 0
+    bg.Parent = screenGui
+    
+    -- Stats container (centered, scales for any screen size)
+    local container = Instance.new("Frame")
+    container.Name = "StatsContainer"
+    container.Size = UDim2.fromScale(0.9, 0.8)  -- 90% width, 80% height
+    container.Position = UDim2.fromScale(0.5, 0.5)
+    container.AnchorPoint = Vector2.new(0.5, 0.5)
+    container.BackgroundTransparency = 1
+    container.Parent = bg
+    
+    -- Add UIListLayout for auto-stacking
+    local layout = Instance.new("UIListLayout")
+    layout.FillDirection = Enum.FillDirection.Vertical
+    layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+    layout.VerticalAlignment = Enum.VerticalAlignment.Center
+    layout.Padding = UDim.new(0.02, 0)  -- 2% padding between stats
+    layout.Parent = container
+    
+    -- Helper to create stat label
+    local function createStat(name, emoji)
+        local label = Instance.new("TextLabel")
+        label.Name = name
+        label.Size = UDim2.fromScale(1, 0.12)  -- 12% of container height
+        label.BackgroundTransparency = 1
+        label.TextColor3 = Color3.fromRGB(255, 255, 255)
+        label.TextScaled = true
+        label.Font = Enum.Font.GothamBold
+        label.Text = emoji .. " " .. name .. ": ..."
+        label.Parent = container
+        
+        -- Add text size constraint for readability
+        local constraint = Instance.new("UITextSizeConstraint")
+        constraint.MaxTextSize = 60
+        constraint.MinTextSize = 20
+        constraint.Parent = label
+        
+        return label
+    end
+    
+    -- Create stat labels
+    createStat("Clicks", "💰")
+    createStat("Rebirths", "🔄")
+    createStat("Eggs", "🥚")
+    createStat("EggsPerSec", "⚡")
+    createStat("Runtime", "⏱️")
+    
+    -- Username label at bottom (big and easy to see)
+    local usernameLabel = Instance.new("TextLabel")
+    usernameLabel.Name = "Username"
+    usernameLabel.Size = UDim2.fromScale(1, 0.15)  -- 15% of screen height
+    usernameLabel.Position = UDim2.fromScale(0.5, 0.92)  -- Near bottom
+    usernameLabel.AnchorPoint = Vector2.new(0.5, 0.5)
+    usernameLabel.BackgroundTransparency = 1
+    usernameLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+    usernameLabel.TextScaled = true
+    usernameLabel.Font = Enum.Font.GothamBlack
+    usernameLabel.Text = LocalPlayer.Name
+    usernameLabel.Parent = bg
+    
+    local usernameConstraint = Instance.new("UITextSizeConstraint")
+    usernameConstraint.MaxTextSize = 120  -- Big text
+    usernameConstraint.MinTextSize = 40
+    usernameConstraint.Parent = usernameLabel
+    
+    screenGui.Parent = playerGui
+    _overlayGui = screenGui
+    _overlayStats.startTime = os.clock()
+    
+    log("INFO", "Overlay UI created")
+end
+
+function Kaitun.UpdateOverlayUI()
+    if not _overlayGui then return end
+    
+    local data = Kaitun.GetData()
+    local stats = data and data.Statistics or {}
+    
+    -- Update background color:
+    -- - Blue if in Trading Plaza (mode indicator)
+    -- - Green if has Secret pet (normal servers)
+    -- - Black otherwise
+    local hasSecret = false
+    if data and data.Pets then
+        for _, pet in pairs(data.Pets) do
+            if pet and pet.Name then
+                local rarity = PetStats:GetRarity(pet.Name)
+                if rarity and tostring(rarity):find("Secret") then
+                    hasSecret = true
+                    break
+                end
+            end
+        end
+    end
+    local bg = _overlayGui:FindFirstChild("Background")
+    if bg then
+        if _overlayStats.testModeError then
+            bg.BackgroundColor3 = Color3.fromRGB(150, 0, 0) -- Red = gamepass detection failed
+        elseif Kaitun.IsInSecretPlaza() then
+            bg.BackgroundColor3 = Color3.fromRGB(100, 0, 130) -- Purple in secret plaza
+        elseif Kaitun.IsInPlaza() then
+            bg.BackgroundColor3 = Color3.fromRGB(0, 60, 160) -- Blue in normal plaza
+        else
+            bg.BackgroundColor3 = hasSecret and Color3.fromRGB(0, 100, 0) or Color3.fromRGB(0, 0, 0)
+        end
+    end
+    
+    local container = _overlayGui:FindFirstChild("Background") and _overlayGui.Background:FindFirstChild("StatsContainer")
+    if not container then return end
+    
+    -- Update stats
+    local clicksLabel = container:FindFirstChild("Clicks")
+    if clicksLabel then
+        clicksLabel.Text = ("💰 Clicks: %s"):format(formatNumber(stats.Clicks or 0))
+    end
+    
+    local rebirthsLabel = container:FindFirstChild("Rebirths")
+    if rebirthsLabel then
+        rebirthsLabel.Text = ("🔄 Rebirths: %s"):format(formatNumber(stats.Rebirths or 0))
+    end
+    
+    local eggsLabel = container:FindFirstChild("Eggs")
+    if eggsLabel then
+        eggsLabel.Text = ("🥚 Eggs: %d"):format(stats.Eggs or 0)
+    end
+    
+    -- Eggs per second (rolling average over last 5 minutes; shorter if runtime < 5m)
+    local currentEggs = tonumber(stats.Eggs) or 0
+    local currentTime = os.clock()
+    do
+        local samples = _overlayStats.eggsSamples
+        samples[#samples + 1] = {ts = currentTime, eggs = currentEggs}
+
+        local windowSeconds = 300
+        local cutoff = currentTime - windowSeconds
+        while #samples > 2 and samples[1].ts < cutoff do
+            table.remove(samples, 1)
+        end
+
+        if #samples >= 2 then
+            local first = samples[1]
+            local last = samples[#samples]
+            local dt = last.ts - first.ts
+            local de = last.eggs - first.eggs
+            if dt > 0 and de >= 0 then
+                _overlayStats.eggsPerSec = de / dt
+            else
+                _overlayStats.eggsPerSec = 0
+            end
+        else
+            _overlayStats.eggsPerSec = 0
+        end
+    end
+    
+    local eggRateLabel = container:FindFirstChild("EggsPerSec")
+    if eggRateLabel then
+        eggRateLabel.Text = ("⚡ Rate (5m avg): %.2f eggs/sec"):format(_overlayStats.eggsPerSec)
+    end
+    
+    -- Runtime
+    local runtimeLabel = container:FindFirstChild("Runtime")
+    if runtimeLabel then
+        local elapsed = os.clock() - _overlayStats.startTime
+        local hours = math.floor(elapsed / 3600)
+        local mins = math.floor((elapsed % 3600) / 60)
+        local secs = math.floor(elapsed % 60)
+        runtimeLabel.Text = ("⏱️ Runtime: %02d:%02d:%02d"):format(hours, mins, secs)
+    end
+end
+
+----------------------------------------------------------------
+-- PERFORMANCE OPTIMIZATIONS
+----------------------------------------------------------------
+
+local function applyPerformanceOptimizations()
+    local cfg = Config.Performance
+    if not cfg or not cfg.Enabled then
+        log("INFO", "Performance: Optimizations disabled")
+        return
+    end
+    
+    -- FPS cap (reduces CPU usage)
+    if cfg.FPSCap and tonumber(cfg.FPSCap) then
+        local fps = math.clamp(tonumber(cfg.FPSCap), 10, 240)
+        local success = pcall(function()
+            setfpscap(fps)
+        end)
+        if success then
+            log("INFO", ("Performance: FPS capped at %d"):format(fps))
+        end
+    end
+    
+    -- 3D rendering
+    if cfg.Disable3DRendering then
+        pcall(function()
+            -- Disable rendering at engine level
+            game:GetService("RunService"):Set3dRenderingEnabled(false)
+            
+            local camera = workspace.CurrentCamera
+            if camera then
+                camera.CameraSubject = nil
+                for _, effect in ipairs(camera:GetChildren()) do
+                    if effect:IsA("PostEffect") then
+                        effect.Enabled = false
+                    end
+                end
+            end
+            log("INFO", "Performance: 3D rendering disabled")
+        end)
+    end
+    
+    -- Workspace cleanup (textures, particles, etc.)
+    pcall(function()
+        for _, obj in ipairs(workspace:GetDescendants()) do
+            -- Particles
+            if cfg.DisableParticles and (obj:IsA("ParticleEmitter") or obj:IsA("Trail") or obj:IsA("Beam") or obj:IsA("Fire") or obj:IsA("Smoke") or obj:IsA("Sparkles")) then
+                obj.Enabled = false
+            -- Textures
+            elseif cfg.DisableTextures then
+                if obj:IsA("MeshPart") then
+                    obj.TextureID = ""
+                elseif obj:IsA("Decal") or obj:IsA("Texture") then
+                    obj.Transparency = 1
+                end
+            end
+            -- Shadows
+            if cfg.DisableShadows and obj:IsA("BasePart") then
+                obj.CastShadow = false
+                obj.Material = Enum.Material.SmoothPlastic
+            end
+            -- Lights
+            if cfg.DisableShadows and obj:IsA("Light") then
+                obj.Enabled = false
+            end
+            -- Sounds
+            if cfg.DisableSounds and obj:IsA("Sound") then
+                obj.Volume = 0
+            end
+        end
+        log("INFO", "Performance: Workspace optimized")
+    end)
+    
+    -- Lighting
+    if cfg.DisableShadows then
+        pcall(function()
+            local lighting = game:GetService("Lighting")
+            lighting.GlobalShadows = false
+            lighting.FogEnd = 100
+            lighting.Brightness = 0
+            log("INFO", "Performance: Lighting disabled")
+        end)
+    end
+    
+    -- Aggressive memory optimizations
+    if cfg.DestroyAccessories or cfg.MinimalCharacter then
+        pcall(function()
+            local char = LocalPlayer.Character
+            if char then
+                -- Destroy accessories (hats, gear, etc.) - huge RAM savings
+                if cfg.DestroyAccessories then
+                    for _, obj in ipairs(char:GetDescendants()) do
+                        if obj:IsA("Accessory") or obj:IsA("Clothing") or obj:IsA("CharacterMesh") then
+                            obj:Destroy()
+                        end
+                    end
+                end
+                
+                -- Minimal character (keep only HumanoidRootPart + Humanoid)
+                if cfg.MinimalCharacter then
+                    for _, part in ipairs(char:GetChildren()) do
+                        if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" and part.Name ~= "Head" then
+                            -- Keep HRP and Head (essential), destroy limbs/torso meshes
+                            if part:IsA("MeshPart") then
+                                part.TextureID = ""
+                                part.MeshId = ""
+                            end
+                        end
+                    end
+                end
+            end
+            log("INFO", "Performance: Character optimized")
+        end)
+    end
+    
+    -- Clear/destroy GUIs
+    pcall(function()
+        local playerGui = LocalPlayer:FindFirstChild("PlayerGui")
+        if not playerGui then return end
+        
+        if cfg.DestroyAllUI then
+            -- EXTREME: Destroy everything (you'll see nothing but console)
+            playerGui:ClearAllChildren()
+            log("INFO", "Performance: ALL UI destroyed")
+        elseif cfg.ClearUnusedGUIs then
+            -- Selective: Only destroy visual fluff
+            for _, gui in ipairs(playerGui:GetChildren()) do
+                local name = gui.Name:lower()
+                if name:find("effect") or name:find("particle") or name:find("animation") 
+                   or name:find("intro") or name:find("tutorial") or name:find("showcase") then
+                    gui:Destroy()
+                end
+            end
+            log("INFO", "Performance: Unused GUIs cleared")
+        end
+    end)
+    
+    -- Destroy pet models in workspace (they're just visual, not needed for automation)
+    if cfg.DestroyPetModels then
+        pcall(function()
+            local destroyed = 0
+            for _, folder in ipairs(workspace:GetChildren()) do
+                local name = folder.Name
+                if name == "PetInstances" or name == "GoldPets" or name == "RainbowPets" 
+                   or name == "DiamondPets" or name:find("Pets") then
+                    folder:ClearAllChildren()  -- Keep folder, clear contents
+                    destroyed = destroyed + 1
+                end
+            end
+            if destroyed > 0 then
+                log("INFO", ("Performance: Cleared %d pet model folders"):format(destroyed))
+            end
+        end)
+    end
+    
+    -- Clear sound buffers
+    if cfg.ClearSoundBuffers then
+        pcall(function()
+            for _, sound in ipairs(workspace:GetDescendants()) do
+                if sound:IsA("Sound") then
+                    sound.SoundId = ""  -- Clear sound buffer
+                    sound.Volume = 0
+                end
+            end
+            log("INFO", "Performance: Sound buffers cleared")
+        end)
+    end
+    
+    -- Periodic garbage collection + memory cleanup
+    if cfg.PeriodicGC then
+        task.spawn(function()
+            while _running do
+                task.wait(60)  -- Every minute
+                pcall(function()
+                    if cfg.Disable3DRendering then
+                        game:GetService("RunService"):Set3dRenderingEnabled(false)
+                    end
+                end)
+                -- Force garbage collection (executor-safe)
+                pcall(function()
+                    local before = gcinfo()
+                    collectgarbage("count")  -- Trigger GC via count (executor-safe)
+                    local after = gcinfo()
+                    if (before - after) > 1000 then  -- If freed >1MB, log it
+                        log("DEBUG", ("GC: Freed %.1f MB"):format((before - after) / 1024))
+                    end
+                end)
+            end
+        end)
+    end
+    
+    log("INFO", "Performance: All optimizations applied")
+end
+
+-- Friends: AddAll (send friend requests to all players for friendship boosts)
+function Kaitun.StartAddAll()
+    if not Config.Friends or not Config.Friends.AddAll then return end
+    
+    local addDelay = Config.Friends.AddDelay or 1  -- Delay between requests (seconds)
+    
+    local function requestFriendship(player)
+        if player == LocalPlayer then return end
+        pcall(function()
+            LocalPlayer:RequestFriendship(player)
+        end)
+    end
+    
+    -- Request friendship from all existing players (with delay, in background)
+    task.spawn(function()
+        for _, player in ipairs(Players:GetPlayers()) do
+            if not _running then return end
+            requestFriendship(player)
+            task.wait(addDelay)
+        end
+    end)
+    
+    -- Request friendship from new players as they join
+    Players.PlayerAdded:Connect(function(player)
+        if not _running then return end
+        requestFriendship(player)
+    end)
+    
+    log("INFO", "AddAll: Friend requests enabled (delay: " .. addDelay .. "s)")
+end
+
+function Kaitun.Init()
+    log("INFO", "Kaitun v" .. Kaitun._VERSION)
+    log("INFO", "Player: " .. LocalPlayer.Name)
+    
+    -- Apply performance optimizations before heavy automation starts
+    applyPerformanceOptimizations()
+    
+    -- Create overlay UI
+    task.spawn(function()
+        task.wait(2)  -- Wait for PlayerGui to load
+        Kaitun.CreateOverlayUI()
+    end)
+    
+    while not Replication.Loaded do
+        task.wait(0.1)
+    end
+    
+    local data = Kaitun.GetData()
+    local eggCount = 0
+    for _, v in pairs(data.UnlockedEggs or {}) do
+        if v then eggCount = eggCount + 1 end
+    end
+    
+    log("INFO", ("Clicks: %s | Pets: %d | Eggs: %d | Rebirths: %d"):format(
+        formatNumber(data.Statistics and data.Statistics.Clicks or 0),
+        Kaitun.GetPetCount(),
+        eggCount,
+        Kaitun.GetRebirths()
+    ))
+    
+    log("INFO", "Config: AutoTap=" .. tostring(Config.AutoTap.Enabled) ..
+        " | Hatch=" .. tostring(Config.EggHatching.Enabled) ..
+        " | AutoDelete=" .. tostring(Config.Pets.AutoDelete.Enabled) ..
+        " | Minigames=" .. tostring(Config.Minigames.Enabled) ..
+        " | WorldUnlock=" .. tostring(Config.WorldUnlock.Enabled))
+    
+    if Config.Rebirth.Enabled then
+        local mode = Config.Rebirth.Mode
+        local info = "Rebirth: " .. mode
+        if mode == "save" then
+            info = info .. " (target: " .. Config.Rebirth.SaveTarget .. ")"
+        end
+        log("INFO", info)
+    end
+    
+    if Config.WorldUnlock.Enabled then
+        local _, nextZone = Kaitun.GetNextLockedZone()
+        if nextZone then
+            log("INFO", "WorldUnlock: Next zone available (FREE via teleport!)")
+        else
+            log("INFO", "WorldUnlock: All zones unlocked!")
+        end
+    end
+    
+    if Config.Director and Config.Director.Enabled then
+        log("INFO", ("Director: Hatching=quest->index->best | ActiveQuests=%s"):format(Kaitun.GetQuestSummary(6)))
+        local targetTier = Config.Director.Goals and tonumber(Config.Director.Goals.CollectionTargetTier) or 0
+        if targetTier > 0 then
+            local current, required, tier = Kaitun.GetCollectionProgress()
+            if current and tier then
+                -- Collection data is populated, show progress
+                local tasks = AchievementsData and AchievementsData.Collection and AchievementsData.Collection.Tasks
+                local tTask = tasks and tasks[targetTier]
+                local tTitle = tTask and tTask.Title or ("T" .. targetTier)
+                log("INFO", ("Collection Goal: %s (%d/%d discovered, currentTier=%d)"):format(
+                    tTitle,
+                    current,
+                    tTask and tTask.Amount or 0,
+                    tier
+                ))
+            else
+                -- Collection data not populated yet
+                local discoveredCount = (Kaitun.GetData() and Kaitun.GetData().DiscoveredCount) or 0
+                log("INFO", ("Collection Goal: Tier %d target (%d discovered, waiting for game sync)"):format(
+                    targetTier,
+                    discoveredCount
+                ))
+            end
+        end
+    end
+    
+    -- Start AddAll friend requests
+    Kaitun.StartAddAll()
+    
+    setStatus("Initialized", "Ready to run")
+    log("INFO", "Ready!")
+end
+
+function Kaitun.Run()
+    Kaitun.Init()
+
+    -- TEMP: optionally start plaza bootstrap from within kaitun (non-blocking)
+    pcall(function()
+        Kaitun.StartPlazaBootstrap()
+    end)
+    
+    -- If in plaza, wait for booth claim before starting automation
+    if Kaitun.IsInPlaza() then
+        Kaitun.WaitForBoothClaim()
+    end
+    
+    setStatus("Running", "Starting automation loops")
+    
+    -- Start loops
+    -- Wrap each loop in error protection (auto-restarts if crashes)
+    local function safeLoop(loopFunc, loopName)
+        task.spawn(function()
+            while _running do
+                local ok, err = pcall(loopFunc)
+                if not ok then
+                    log("ERROR", ("%s crashed: %s"):format(loopName, tostring(err)))
+                    log("ERROR", ("Restarting %s in 5 seconds..."):format(loopName))
+                    task.wait(5)
+                end
+            end
+        end)
+    end
+    
+    safeLoop(Kaitun.TapLoop, "TapLoop")
+    safeLoop(Kaitun.HatchLoop, "HatchLoop")
+    safeLoop(Kaitun.MinigameLoop, "MinigameLoop")
+    safeLoop(Kaitun.UnlockLoop, "UnlockLoop")
+    safeLoop(Kaitun.TravelLoop, "TravelLoop")
+    safeLoop(Kaitun.ManagementLoop, "ManagementLoop")
+    safeLoop(Kaitun.CraftingLoop, "CraftingLoop")
+    safeLoop(Kaitun.QuestLoop, "QuestLoop")
+    safeLoop(Kaitun.PetIndexRewardLoop, "PetIndexRewardLoop")
+    safeLoop(Kaitun.PotionLoop, "PotionLoop")
+    safeLoop(Kaitun.RankRewardLoop, "RankRewardLoop")
+    safeLoop(Kaitun.ElectricWheelLoop, "ElectricWheelLoop")
+    safeLoop(Kaitun.TokenTrackLoop, "TokenTrackLoop")
+    safeLoop(Kaitun.GamepassAutoBuyLoop, "GamepassAutoBuyLoop")
+    
+    pcall(Kaitun.StartAutoJump)  -- Protect auto-jump too
+    
+    -- Overlay UI updater (fast refresh for live stats)
+    task.spawn(function()
+        while _running do
+            task.wait(1)  -- Update overlay every second for live stats
+            pcall(Kaitun.UpdateOverlayUI)
+        end
+    end)
+    
+    -- Stats reporter with eggs/sec tracker
+    local lastEggs = 0
+    local lastTime = os.clock()
+    
+    while _running do
+        task.wait(30)
+        
+        log("INFO", ("Status: %s"):format(Kaitun.GetStatus()))
+        local data = Kaitun.GetData()
+        local stats = data and data.Statistics or {}
+        local currentEggs = stats.Eggs or 0
+        local currentTime = os.clock()
+        
+        -- Calculate eggs per second
+        local eggsPerSec = 0
+        local dt = currentTime - lastTime
+        if dt > 0 and lastEggs > 0 then
+            local de = currentEggs - lastEggs
+            eggsPerSec = de / dt
+        end
+        lastEggs = currentEggs
+        lastTime = currentTime
+        
+        log("INFO", ("Eggs: %d (%.2f/sec) | Rebirths: %d | Minigames: %d | Pets: %d"):format(
+            currentEggs,
+            eggsPerSec,
+            stats.Rebirths or 0,
+            stats.MinigamesCompleted or 0,
+            Kaitun.GetPetCount()
+        ))
+        log("INFO", ("Clicks: %s | Gems: %d"):format(formatNumber(stats.Clicks or 0), stats.Gems or 0))
+    end
+end
+
+function Kaitun.Stop()
+    _running = false
+    pcall(function()
+        if _ENVROOT then
+            _ENVROOT.AutoJumpRunning = false
+        end
+    end)
+    pcall(function()
+        if _overlayGui then
+            _overlayGui:Destroy()
+            _overlayGui = nil
+        end
+    end)
+    log("INFO", "Stopped")
+end
+
+-- Register singleton instance (for bootstrap hot-reload)
+_ENVROOT.__KAITUN_INSTANCE = Kaitun
+Kaitun._running = true  -- Expose for bootstrap alive check
+
+----------------------------------------------------------------
+-- START
+----------------------------------------------------------------
+
+log("INFO", "=================================")
+log("INFO", "   KAITUN v2.2")
+log("INFO", "=================================")
+
+Kaitun.Run()
+
